@@ -14,27 +14,10 @@
     <nav class="navbar">
         <div class="logo">Open DM Admin</div>
         <div class="nav-links">
-            <a href="../../frontend/app/dashboard/dashboard.html" class="nav-link">Go to Client Dashboard</a>
             <button id="admin-logout-btn" class="btn-outline">Logout</button>
         </div>
     </nav>
     <main class="admin-container wide">
-
-        <!-- Telemetry & System Stats Row -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>Total Workspaces</h3>
-                <p id="stat-workspaces">0</p>
-            </div>
-            <div class="stat-card">
-                <h3>Active Meta Connections</h3>
-                <p id="stat-meta">0</p>
-            </div>
-            <div class="stat-card">
-                <h3>Comments Processed</h3>
-                <p id="stat-comments">0</p>
-            </div>
-        </div>
 
         <div class="dashboard-grid">
             <!-- Invite Client Form -->
@@ -43,19 +26,12 @@
                 <p>Creates a workspace and sends a magic login link.</p>
                 <form id="invite-form">
                     <input type="email" id="client-email" placeholder="client@brand.com" required>
+                    <input type="text" id="workspace-name" placeholder="Client workspace name" required maxlength="100">
                     <button type="submit" id="invite-btn">Send Invite</button>
                 </form>
                 <div id="invite-status"></div>
             </div>
 
-            <!-- Full Workspace Control Panel -->
-            <div class="card workspace-card">
-                <h2>Workspace Control List</h2>
-                <p>Monitor client status, linked accounts, and enforce platform bans.</p>
-                <div id="accounts-container" class="accounts-list">
-                    <p style="color: #a0a0a0;">Loading telemetry and workspace data...</p>
-                </div>
-            </div>
         </div>
     </main>
     <script type="module" src="admin.js"></script>

@@ -6,30 +6,30 @@
 //
 // npm install @supabase/supabase-js   (run inside admin/backend)
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseAdmin = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-);
+import { adminClient, requireAdmin } from './_auth.js';
 
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
 
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+
     const { email, workspaceName } = req.body || {};
 
-    if (!email || !workspaceName) {
+    if (typeof email !== 'string' || typeof workspaceName !== 'string' || !email.trim() || !workspaceName.trim()) {
         return res.status(400).json({ error: 'email and workspaceName are required' });
     }
 
     try {
+        const supabaseAdmin = adminClient();
+        const appUrl = process.env.APP_URL;
+        if (!appUrl) throw new Error('Missing required server environment variable: APP_URL');
         // 1. Create the workspace
         const { data: workspace, error: wsError } = await supabaseAdmin
             .from('workspaces')
-            .insert({ name: workspaceName, status: 'active' })
+            .insert({ name: workspaceName.trim(), status: 'active', invited_by: admin.id })
             .select()
             .single();
 
@@ -40,11 +40,14 @@ export default async function handler(req, res) {
             email,
             {
                 data: { workspace_id: workspace.id }, // stashed in user metadata, read after they accept
-                redirectTo: process.env.INVITE_REDIRECT_URL // e.g. https://yourapp.com/auth/callback
+                redirectTo: `${appUrl}/app/dashboard/dashboard.html`
             }
         );
 
-        if (inviteError) throw inviteError;
+        if (inviteError) {
+            await supabaseAdmin.from('workspaces').delete().eq('id', workspace.id);
+            throw inviteError;
+        }
 
         // 3. Link the invited user to the workspace as owner
         const { error: memberError } = await supabaseAdmin
@@ -55,7 +58,10 @@ export default async function handler(req, res) {
                 role: 'owner'
             });
 
-        if (memberError) throw memberError;
+        if (memberError) {
+            await supabaseAdmin.from('workspaces').delete().eq('id', workspace.id);
+            throw memberError;
+        }
 
         return res.status(200).json({
             ok: true,

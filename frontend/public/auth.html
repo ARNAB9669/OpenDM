@@ -3,24 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Console | Open DM</title>
-    <link rel="stylesheet" href="admin.css">
+    <title>Sign in | Open DM</title>
+    <link rel="stylesheet" href="auth.css">
 </head>
 <body>
     <nav class="navbar">
-        <div class="logo">Open DM Admin</div>
+        <div class="logo">Open DM</div>
     </nav>
     <main class="admin-container">
         <div class="card">
-            <h2>Invite New Client</h2>
-            <p>Creates a workspace and sends a magic login link.</p>
-            <form id="invite-form">
-                <input type="email" id="client-email" placeholder="client@brand.com" required>
-                <button type="submit" id="invite-btn">Send Invite</button>
+            <h2>Sign in to your workspace</h2>
+            <p>Open DM is invite-only. Use the email address that received your invitation.</p>
+            <form id="auth-form">
+                <input type="email" id="email" placeholder="you@company.com" required autocomplete="email">
+                <button type="submit" id="submit-btn">Send sign-in link</button>
             </form>
-            <div id="invite-status"></div>
+            <div id="auth-message" role="status"></div>
         </div>
     </main>
-    <script src="admin.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="config.js"></script>
+    <script src="auth.js"></script>
 </body>
 </html>

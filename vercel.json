@@ -1,12 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/admin/backend/api/$1"
-    },
-    {
       "source": "/admin",
-      "destination": "/admin/frontend/admin-login.html"
+      "destination": "/admin/frontend/login.html"
     },
     {
       "source": "/admin/(.*)",
