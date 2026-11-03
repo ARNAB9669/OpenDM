@@ -1,12 +1,14 @@
 export function setInviteStatus(element, message, isSuccess) {
     element.style.display = 'block';
     element.textContent = message;
-    element.style.color = isSuccess ? '#10b981' : '#ef4444';
+    element.className = `invite-status ${isSuccess ? 'success' : 'error'}`;
 }
 
 export function setButtonLoading(button, isLoading) {
     button.disabled = isLoading;
-    button.textContent = isLoading ? 'Sending Invite...' : 'Send Invite';
+    button.innerHTML = isLoading
+        ? '<span>Sending invitation…</span><span class="button-spinner" aria-hidden="true"></span>'
+        : '<span>Send invitation</span><span aria-hidden="true">→</span>';
 }
 
 export function updateTelemetry(stats) {

@@ -1,25 +1,27 @@
-export async function getAccounts() {
-    try {
-        const response = await fetch('/api/accounts');
-        if (!response.ok) return [];
-        return await response.json();
-    } catch (e) {
-        console.error("Failed to fetch accounts:", e);
-        return [];
-    }
+import { getAccessToken } from './accounts.js';
+
+async function adminRequest(path, options = {}) {
+    const token = await getAccessToken();
+    const response = await fetch(path, {
+        ...options,
+        headers: {
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            Authorization: `Bearer ${token}`,
+            ...options.headers
+        }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+    return data;
 }
 
-export async function toggleBan(workspaceId, currentStatus) {
-    const newStatus = currentStatus === 'active' ? 'banned' : 'active';
-    try {
-        const response = await fetch('/api/ban', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workspaceId, status: newStatus })
-        });
-        return response.ok;
-    } catch (e) {
-        console.error("Failed to toggle ban status:", e);
-        return false;
-    }
+export function getAdminOverview() {
+    return adminRequest('/api/accounts');
+}
+
+export function updateWorkspaceStatus(workspaceId, status) {
+    return adminRequest('/api/workspace-status', {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId, status })
+    });
 }

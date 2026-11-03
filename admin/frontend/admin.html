@@ -13,27 +13,82 @@
 
 <body>
     <nav class="navbar">
-        <div class="logo">Open DM Admin</div>
+        <a class="logo" href="/">Open DM <span>ADMIN</span></a>
         <div class="nav-links">
             <button id="admin-logout-btn" class="btn-outline">Logout</button>
         </div>
     </nav>
     <main class="admin-container wide">
-
-        <div class="dashboard-grid">
-            <!-- Invite Client Form -->
+        <header class="dashboard-heading">
+            <div>
+                <p class="eyebrow">ADMIN CONSOLE</p>
+                <h1>Admin overview</h1>
+                <p class="dashboard-intro">Manage client workspaces, access, and connected Instagram accounts.</p>
+            </div>
+            <div class="access-pill"><span></span> Admin session active</div>
+        </header>
+        <section class="admin-top-grid" aria-label="Invite clients">
             <div class="card invite-card">
-                <h2>Invite New Client</h2>
-                <p>Creates a workspace and sends a magic login link.</p>
+                <div class="card-heading">
+                    <div class="card-icon" aria-hidden="true">+</div>
+                    <div>
+                        <h2>Invite a client</h2>
+                        <p>Create their workspace and email a secure sign-in link.</p>
+                    </div>
+                </div>
                 <form id="invite-form">
-                    <input type="email" id="client-email" placeholder="client@brand.com" required>
-                    <input type="text" id="workspace-name" placeholder="Client workspace name" required maxlength="100">
-                    <button type="submit" id="invite-btn">Send Invite</button>
+                    <div class="field-group">
+                        <label for="client-email">Client email</label>
+                        <input type="email" id="client-email" placeholder="name@company.com" required autocomplete="email">
+                        <small>The invite link will be sent to this address.</small>
+                    </div>
+                    <div class="field-group">
+                        <label for="workspace-name">Workspace name</label>
+                        <input type="text" id="workspace-name" placeholder="e.g. Acme Studio" required maxlength="100" autocomplete="organization">
+                        <small>This is the name attached to the client account.</small>
+                    </div>
+                    <button type="submit" id="invite-btn"><span>Send invitation</span><span aria-hidden="true">→</span></button>
                 </form>
-                <div id="invite-status"></div>
+                <div id="invite-status" role="status" aria-live="polite"></div>
             </div>
 
-        </div>
+            <aside class="card invite-guide">
+                <p class="eyebrow">WHAT HAPPENS NEXT</p>
+                <h2>One invite, ready to go</h2>
+                <ol>
+                    <li><span>1</span><div><strong>Workspace created</strong><small>A dedicated workspace is made for the client.</small></div></li>
+                    <li><span>2</span><div><strong>Secure link emailed</strong><small>They use the link to sign in with their email.</small></div></li>
+                    <li><span>3</span><div><strong>Access checked</strong><small>Only invited members can open their workspace.</small></div></li>
+                </ol>
+                <div class="guide-note">Use an email address that is not already registered in this project.</div>
+            </div>
+        </section>
+
+        <section class="stats-grid admin-stats" aria-label="Platform totals">
+            <article class="stat-card"><span class="stat-icon">▦</span><div><p class="stat-label">Workspaces</p><p class="stat-value" id="stat-workspaces">—</p></div></article>
+            <article class="stat-card"><span class="stat-icon green">✓</span><div><p class="stat-label">Active workspaces</p><p class="stat-value" id="stat-active">—</p></div></article>
+            <article class="stat-card"><span class="stat-icon blue">◎</span><div><p class="stat-label">Instagram accounts</p><p class="stat-value" id="stat-accounts">—</p></div></article>
+            <article class="stat-card"><span class="stat-icon amber">↗</span><div><p class="stat-label">Comments processed</p><p class="stat-value" id="stat-comments">—</p></div></article>
+        </section>
+
+        <section class="card workspace-panel" aria-labelledby="workspace-title">
+            <div class="workspace-panel-heading">
+                <div><p class="eyebrow">CLIENT MANAGEMENT</p><h2 id="workspace-title">All workspaces</h2><p class="panel-copy">Review clients, connections, and account status.</p></div>
+                <button type="button" class="btn-outline refresh-button" id="refresh-workspaces"><span aria-hidden="true">↻</span> Refresh</button>
+            </div>
+            <div class="workspace-toolbar">
+                <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" id="workspace-search" placeholder="Search name, email, or ID" aria-label="Search workspaces"></label>
+                <label class="filter-box"><span class="sr-only">Filter by status</span><select id="workspace-filter"><option value="all">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option><option value="banned">Banned</option></select></label>
+                <span class="result-count" id="workspace-count">Loading…</span>
+            </div>
+            <div class="workspace-table-wrap">
+                <table class="workspace-table">
+                    <thead><tr><th>Workspace</th><th>Client members</th><th>Instagram</th><th>Automation</th><th>Created</th><th>Status</th><th>Manage</th></tr></thead>
+                    <tbody id="workspace-rows"><tr><td colspan="7" class="table-message">Loading workspace data…</td></tr></tbody>
+                </table>
+            </div>
+            <div id="workspace-error" class="workspace-error" role="alert" hidden></div>
+        </section>
     </main>
     <script type="module" src="/admin/admin.js"></script>
 </body>
