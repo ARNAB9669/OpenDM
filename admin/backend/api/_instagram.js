@@ -51,6 +51,16 @@ export function graphVersion() {
     return process.env.GRAPH_API_VERSION || 'v25.0';
 }
 
+export function graphUrl(path) {
+    return `https://graph.facebook.com/${graphVersion()}/${path.replace(/^\/+/, '')}`;
+}
+
+export function metaLoginConfigId() {
+    const value = process.env.META_LOGIN_CONFIG_ID;
+    if (!value) throw new Error('Missing required server environment variable: META_LOGIN_CONFIG_ID');
+    return value;
+}
+
 function requiredAppSecret() {
     const secret = process.env.META_APP_SECRET;
     if (!secret) throw new Error('Missing required server environment variable: META_APP_SECRET');

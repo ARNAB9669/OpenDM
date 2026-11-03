@@ -1,5 +1,5 @@
 import { activeWorkspaceForUser, adminClient, requireUser } from './_auth.js';
-import { graphVersion } from './_instagram.js';
+import { graphUrl } from './_instagram.js';
 
 export default async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -18,7 +18,7 @@ export default async function handler(req, res) {
         if (accountError) throw accountError;
         if (!account) return res.status(200).json({ connected: false, media: [] });
 
-        const url = new URL(`https://graph.instagram.com/${graphVersion()}/me/media`);
+        const url = new URL(graphUrl(`${account.ig_account_id}/media`));
         url.search = new URLSearchParams({
             fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp',
             limit: '24',

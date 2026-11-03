@@ -38,16 +38,18 @@ create table if not exists connected_accounts (
   workspace_id       uuid not null references workspaces(id) on delete cascade,
   platform           text not null default 'instagram' check (platform in ('instagram')),
   ig_account_id      text not null,
-  -- Legacy Facebook Page ID; Instagram Login does not provide a Page ID.
+  -- Legacy Facebook Page ID; Unified Login connects the Instagram asset directly.
   page_id            text,
   long_lived_token   text not null,
-  token_expires_at   timestamptz not null,
+  token_expires_at   timestamptz,
   connected_at       timestamptz not null default now(),
   unique (workspace_id, ig_account_id)
 );
 
 -- IG Login profile label used by the client dashboard. Safe for existing installs.
 alter table connected_accounts add column if not exists ig_username text;
+-- Unified Login system-user tokens may have no scheduled expiration.
+alter table connected_accounts alter column token_expires_at drop not null;
 -- Existing installs may still have the legacy NOT NULL constraint. Instagram
 -- Login stores the Instagram account ID directly and has no Facebook Page ID.
 alter table connected_accounts alter column page_id drop not null;

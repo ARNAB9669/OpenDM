@@ -72,7 +72,7 @@ async function handleWebhookPayload(payload, env) {
             if (change.field !== 'comments') continue;
 
             const comment = change.value;
-            const metaCommentId = comment.id;
+            const metaCommentId = comment.id || comment.comment_id;
             const metaPostId = comment.media?.id || comment.post_id;
             const commenterIgsid = comment.from?.id;
             const commenterName = comment.from?.username || comment.from?.name;
@@ -138,7 +138,7 @@ async function handleWebhookPayload(payload, env) {
             let replyError = null;
             try {
                 const replyRes = await fetch(
-                    `https://graph.instagram.com/${graphVersion}/${metaCommentId}/replies`,
+                    `https://graph.facebook.com/${graphVersion}/${metaCommentId}/replies`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -163,7 +163,7 @@ async function handleWebhookPayload(payload, env) {
             let dmError = null;
             try {
                 const dmRes = await fetch(
-                    `https://graph.instagram.com/${graphVersion}/${post.connected_accounts.ig_account_id}/messages`,
+                    `https://graph.facebook.com/${graphVersion}/${post.connected_accounts.ig_account_id}/messages`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },

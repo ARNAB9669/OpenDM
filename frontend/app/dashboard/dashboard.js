@@ -146,8 +146,8 @@ async function loadInstagram() {
     }
     connectButton.hidden = true;
     accountSummary.hidden = false;
-    const expiry = result.account.expiresAt ? new Date(result.account.expiresAt).toLocaleString() : 'unknown';
-    accountSummary.textContent = `Connected as @${result.account.username}, expires ${expiry}.`;
+    const expiry = result.account.expiresAt ? `expires ${new Date(result.account.expiresAt).toLocaleString()}` : 'no scheduled token expiry';
+    accountSummary.textContent = `Connected as @${result.account.username}, ${expiry}.`;
     mediaItems = result.media;
     renderMedia(mediaItems);
 }

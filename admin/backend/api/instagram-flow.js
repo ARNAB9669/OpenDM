@@ -1,5 +1,5 @@
 import { activeWorkspaceForUser, adminClient, requireUser } from './_auth.js';
-import { graphVersion } from './_instagram.js';
+import { graphUrl } from './_instagram.js';
 
 async function getContext(userId) {
     const membership = await activeWorkspaceForUser(userId);
@@ -16,7 +16,7 @@ async function getContext(userId) {
 }
 
 async function ensureOwnedMedia(account, mediaId) {
-    const url = new URL(`https://graph.instagram.com/${graphVersion()}/${encodeURIComponent(mediaId)}`);
+    const url = new URL(graphUrl(encodeURIComponent(mediaId)));
     url.search = new URLSearchParams({ fields: 'id', access_token: account.long_lived_token }).toString();
     const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
     const data = await response.json().catch(() => ({}));

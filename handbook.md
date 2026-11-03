@@ -29,7 +29,7 @@ Canonical client dashboard files are `frontend/app/dashboard/dashboard.html`, `d
 4. Supabase redirects to `/app/dashboard/dashboard.html` with a session.
 5. `dashboard.js` calls `/api/client-session`; the server verifies the session and checks for an active workspace membership.
 6. The dashboard requests an Instagram connection URL from `/api/instagram-connect`. The server verifies the session, creates signed one-use state bound to the workspace, and returns Instagram's authorization URL.
-7. `/api/instagram-callback` validates and consumes the state, exchanges the code for short- and long-lived tokens, reads the account profile, and stores the token server-side. The dashboard never receives the token.
+7. `/api/instagram-callback` validates and consumes the state, exchanges the Unified Login code for a Business Integration System User token, discovers the shared Instagram professional account, and stores the token server-side. The dashboard never receives the token.
 8. `/api/instagram-media` returns recent media and existing flow settings for the signed-in workspace. `/api/instagram-flow` creates/reuses a monitored post and saves or updates its flow. `/api/instagram-flow-status` aggregates that flow's comment-event results. Each handler validates the user and workspace server-side.
 
 Email delivery uses the SMTP provider configured in Supabase Auth (currently set up with Resend). DNS records authorize sending; they do not create a mailbox. Inbound email/receiving is separate and is not required for portal sign-in.
@@ -49,18 +49,19 @@ ADMIN_EMAIL=<administrator-email>
 APP_URL=https://<production-app-domain>
 META_APP_ID=<Meta-app-id>
 META_APP_SECRET=<Meta-app-secret>
+META_LOGIN_CONFIG_ID=<Facebook-Login-for-Business-configuration-id>
 GRAPH_API_VERSION=v25.0
 ```
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY` in browser code, `frontend/public/config.js`, or a committed file. The browser needs only the Supabase project URL and public anon/publishable key; these are currently set in `frontend/public/config.js` and are intentionally public.
 
-`APP_URL` must be the origin only (no path or trailing slash). For the current production domain, the exact Instagram Business Login redirect URI to register is:
+`APP_URL` must be the origin only (no path or trailing slash). For the current production domain, the exact OAuth redirect URI to register in the Facebook Login for Business configuration is:
 
 ```text
 https://open-dm.covelly.com/api/instagram-callback
 ```
 
-Set the same exact URI in Meta's Instagram Business Login OAuth redirect URI allowlist. Set `META_APP_ID` and `META_APP_SECRET` in Vercel; the secret is already used by the Worker for webhook signature verification, but Vercel and Cloudflare have separate secret stores. `GRAPH_API_VERSION` is optional in Vercel (defaults to `v25.0`) and set to `v25.0` in the Worker config.
+Set the exact URI in the Meta Unified Login configuration, then set its configuration ID as `META_LOGIN_CONFIG_ID` in Vercel. Unified Login uses the Meta app's App ID/secret, a `config_id` rather than OAuth `scope` values, Business Integration System User tokens, and `graph.facebook.com`. The secret is also used by the Worker for webhook signature verification, but Vercel and Cloudflare have separate secret stores. `GRAPH_API_VERSION` is optional in Vercel (defaults to `v25.0`) and set to `v25.0` in the Worker config.
 
 ### Cloudflare Worker secrets
 
@@ -87,7 +88,7 @@ Keep the invite email and magic-link email templates pointing to Supabase's gene
 
 ## Database
 
-`backend/DB/db.sql` defines workspaces, memberships, connected Instagram accounts, monitored posts, automation flows, comment-event logs, OAuth state storage, and row-level security. Run the updated SQL in Supabase before deploying these handlers; it adds `connected_accounts.ig_username`, creates the one-use OAuth-state table, removes browser RLS access to `connected_accounts` so long-lived Instagram tokens cannot be selected by a client session, and removes direct client write policies for monitored posts and flows. Those operations now go through the authorized server handlers. Review the SQL and back it up before applying schema or policy changes to production.
+`backend/DB/db.sql` defines workspaces, memberships, connected Instagram accounts, monitored posts, automation flows, comment-event logs, OAuth state storage, and row-level security. Run the updated SQL in Supabase before deploying these handlers; it adds `connected_accounts.ig_username`, creates the one-use OAuth-state table, allows nullable legacy Page ID and token expiry for Unified Login, removes browser RLS access to `connected_accounts` so tokens cannot be selected by a client session, and removes direct client write policies for monitored posts and flows. Those operations now go through the authorized server handlers. Review the SQL and back it up before applying schema or policy changes to production.
 
 The API uses the service-role key on the server, so every server-side handler must enforce authorization and workspace scoping itself. Do not treat RLS as protection for server code that bypasses RLS.
 
@@ -100,4 +101,4 @@ The API uses the service-role key on the server, so every server-side handler mu
 
 ## Current scope note
 
-Portal sign-in and workspace membership have been exercised. Instagram OAuth, server-side account storage/media loading, the flow builder, and per-flow status feed are implemented in the code but still require the SQL update, Vercel/Meta setup, deployment, and a real Instagram test before they can be called live-working. The Worker now uses `graph.instagram.com` for comment replies and private replies, matching Instagram Login tokens; the previous `graph.facebook.com` host was a mismatch. End-to-end webhook delivery and DM delivery remain unverified until the manual test above succeeds.
+Portal sign-in and workspace membership have been exercised. Instagram OAuth, server-side account storage/media loading, the flow builder, and per-flow status feed are implemented for Unified Login but still require the updated SQL, a Meta configuration ID in Vercel, webhook setup, deployment, and a real Instagram test before they can be called live-working. OAuth and Graph API requests use `graph.facebook.com` with Unified Login system-user tokens. End-to-end webhook delivery and DM delivery remain unverified until the manual test above succeeds.

@@ -1,5 +1,5 @@
 import { adminClient, activeWorkspaceForUser } from './_auth.js';
-import { graphVersion, hashInstagramState, instagramRedirectUri, parseInstagramState } from './_instagram.js';
+import { graphUrl, hashInstagramState, instagramRedirectUri, parseInstagramState } from './_instagram.js';
 
 function dashboardRedirect(res, result, reason = '') {
     const base = process.env.APP_URL?.replace(/\/+$/, '') || '';
@@ -17,6 +17,12 @@ async function readJson(response) {
         throw new Error(message);
     }
     return data;
+}
+
+async function graphGet(path, params) {
+    const url = new URL(graphUrl(path));
+    url.search = new URLSearchParams(params).toString();
+    return readJson(await fetch(url, { signal: AbortSignal.timeout(15000) }));
 }
 
 export default async function handler(req, res) {
@@ -49,58 +55,52 @@ export default async function handler(req, res) {
             throw new Error('The account no longer has access to this workspace.');
         }
 
-        const form = new URLSearchParams({
+        const tokenUrl = new URL(graphUrl('oauth/access_token'));
+        tokenUrl.search = new URLSearchParams({
             client_id: process.env.META_APP_ID || '',
             client_secret: process.env.META_APP_SECRET || '',
-            grant_type: 'authorization_code',
             redirect_uri: instagramRedirectUri(),
             code
         });
-        const shortToken = await readJson(await fetch('https://api.instagram.com/oauth/access_token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: form,
-            signal: AbortSignal.timeout(15000)
-        }));
-        if (!shortToken.access_token) throw new Error('Instagram did not return an access token.');
+        const token = await readJson(await fetch(tokenUrl, { signal: AbortSignal.timeout(15000) }));
+        if (!token.access_token) throw new Error('Meta did not return an access token.');
 
-        const longUrl = new URL('https://graph.instagram.com/access_token');
-        longUrl.search = new URLSearchParams({
-            grant_type: 'ig_exchange_token',
-            client_secret: process.env.META_APP_SECRET || '',
-            access_token: shortToken.access_token
-        }).toString();
-        const longToken = await readJson(await fetch(longUrl, { signal: AbortSignal.timeout(15000) }));
-        if (!longToken.access_token) throw new Error('Instagram did not return a long-lived access token.');
-
-        const profileUrl = new URL(`https://graph.instagram.com/${graphVersion()}/me`);
-        profileUrl.search = new URLSearchParams({ fields: 'user_id,username', access_token: longToken.access_token }).toString();
-        let profile;
-        try {
-            profile = await readJson(await fetch(profileUrl, { signal: AbortSignal.timeout(15000) }));
-        } catch {
-            profileUrl.searchParams.set('fields', 'id,username');
-            profile = await readJson(await fetch(profileUrl, { signal: AbortSignal.timeout(15000) }));
+        // Unified Login returns a Business Integration System User token. The
+        // authorized Instagram asset is discovered through the assigned-account edge.
+        const accounts = await graphGet('me/assigned_instagram_accounts', {
+            fields: 'id,username',
+            access_token: token.access_token
+        });
+        const availableAccounts = accounts.data || [];
+        if (availableAccounts.length !== 1) {
+            throw new Error(availableAccounts.length
+                ? 'More than one Instagram account was authorized. Configure one account and reconnect.'
+                : 'No Instagram professional account was shared. Choose the correct business portfolio and authorize an Instagram account.');
         }
-        const instagramUserId = String(profile.user_id || profile.id || longToken.user_id || shortToken.user_id || '');
-        if (!instagramUserId || !profile.username) throw new Error('Instagram profile response did not include an account ID and username.');
+        const profile = availableAccounts[0];
+        const instagramUserId = String(profile.id || '');
+        if (!instagramUserId || !profile.username) throw new Error('Meta did not return an Instagram account ID and username.');
 
-        const expiresIn = Number(longToken.expires_in) || 60 * 24 * 60 * 60;
-        const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+        // Unified Login configurations can issue never-expiring system-user
+        // tokens. Null means no scheduled expiry (revocation is still possible).
+        const expiresIn = Number(token.expires_in);
+        const expiresAt = Number.isFinite(expiresIn) && expiresIn > 0
+            ? new Date(Date.now() + expiresIn * 1000).toISOString()
+            : null;
         const { error: saveError } = await supabase.from('connected_accounts').upsert({
             workspace_id: state.workspaceId,
             platform: 'instagram',
             ig_account_id: instagramUserId,
             ig_username: profile.username,
-            long_lived_token: longToken.access_token,
+            long_lived_token: token.access_token,
             token_expires_at: expiresAt
         }, { onConflict: 'workspace_id,ig_account_id' });
         if (saveError) throw saveError;
 
         // Subscribe this account to comment webhooks. The app-level webhook URL
         // and the `comments` field still need to be configured in Meta.
-        const subscribeUrl = new URL(`https://graph.instagram.com/${graphVersion()}/me/subscribed_apps`);
-        subscribeUrl.search = new URLSearchParams({ access_token: longToken.access_token }).toString();
+        const subscribeUrl = new URL(graphUrl(`${instagramUserId}/subscribed_apps`));
+        subscribeUrl.search = new URLSearchParams({ access_token: token.access_token }).toString();
         const subscribeBody = new URLSearchParams({ subscribed_fields: 'comments' });
         let webhookWarning = '';
         try {
