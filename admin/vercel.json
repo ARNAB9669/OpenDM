@@ -1,5 +1,24 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/backend/api/:path*" }
+    {
+      "source": "/api/(.*)",
+      "destination": "/admin/backend/api/$1"
+    },
+    {
+      "source": "/admin",
+      "destination": "/admin/frontend/admin-login.html"
+    },
+    {
+      "source": "/admin/(.*)",
+      "destination": "/admin/frontend/$1"
+    },
+    {
+      "source": "/app/(.*)",
+      "destination": "/frontend/app/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/frontend/public/$1"
+    }
   ]
 }
