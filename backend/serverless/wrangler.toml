@@ -1,0 +1,18 @@
+name = "opendm-webhook"
+main = "cw_web_hook.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+GRAPH_API_VERSION = "v21.0"
+
+# Secrets — do NOT put real values here. After `wrangler login`, run each of these
+# from backend/serverless, then paste the value when prompted:
+#   wrangler secret put META_APP_SECRET
+#   wrangler secret put META_VERIFY_TOKEN
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#
+# Deploy with: wrangler deploy
+# Your webhook URL will be: https://opendm-webhook.<your-subdomain>.workers.dev
+# Use that URL (GET + POST) when setting up the Meta webhook subscription,
+# with META_VERIFY_TOKEN matching what you enter in Meta's dashboard.
