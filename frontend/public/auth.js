@@ -1,6 +1,8 @@
 const config = window.OPENDM_CONFIG;
 const configured = config && config.supabaseUrl !== 'YOUR_SUPABASE_URL' && config.supabaseAnonKey !== 'YOUR_SUPABASE_ANON_KEY';
-const supabase = configured ? window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey) : null;
+// The Supabase CDN also exposes a global named `supabase`. Avoid declaring a
+// top-level lexical binding with that same name in this classic script.
+const supabaseClient = configured ? window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey) : null;
 
 const authForm = document.getElementById('auth-form');
 const emailInput = document.getElementById('email');
@@ -8,8 +10,8 @@ const submitBtn = document.getElementById('submit-btn');
 const messageDiv = document.getElementById('auth-message');
 
 async function checkExistingSession() {
-    if (!supabase) return;
-    const { data: { session } } = await supabase.auth.getSession();
+    if (!supabaseClient) return;
+    const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
         window.location.href = '/app/dashboard/dashboard.html';
     }
@@ -18,7 +20,7 @@ checkExistingSession();
 
 authForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!supabase) {
+    if (!supabaseClient) {
         messageDiv.style.display = 'block';
         messageDiv.textContent = 'Open DM is not configured yet. Contact the administrator.';
         messageDiv.style.color = 'red';
@@ -27,7 +29,7 @@ authForm.addEventListener('submit', async (e) => {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Sending...';
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabaseClient.auth.signInWithOtp({
         email: emailInput.value,
         options: {
             emailRedirectTo: window.location.origin + '/app/dashboard/dashboard.html',
