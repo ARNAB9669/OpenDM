@@ -17,6 +17,10 @@
       "destination": "/frontend/app/$1"
     },
     {
+      "source": "/",
+      "destination": "/public/index.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/public/$1"
     }
