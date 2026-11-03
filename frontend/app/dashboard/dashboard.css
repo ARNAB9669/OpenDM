@@ -1,5 +1,27 @@
 * { box-sizing: border-box; }
 
+body {
+    display: block;
+    min-height: 100vh;
+    height: auto;
+    background: #121212;
+    color: #f4f5f8;
+}
+
+.navbar {
+    position: relative;
+    align-items: center;
+    gap: 20px;
+    min-height: 72px;
+}
+
+.navbar .nav-btn {
+    width: auto;
+    min-height: 0;
+    padding: 8px 16px;
+    font: inherit;
+}
+
 .dashboard-container {
     width: min(1180px, calc(100% - 40px));
     margin: 48px auto 80px;
@@ -20,6 +42,8 @@
 }
 
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.section-heading > div { min-width: 0; }
+.section-heading > button { flex: 1 1 320px; }
 .section-heading h2, .flow-editor h2 { margin: 0 0 8px; font-size: 1.5rem; }
 .section-heading p:last-child { margin: 0; }
 .helper-text { margin: 22px 0; }
@@ -71,5 +95,7 @@
 @media (max-width: 640px) {
     .dashboard-container { width: min(100% - 24px, 1180px); margin-top: 26px; }
     .section-heading { align-items: flex-start; flex-direction: column; }
+    .section-heading > button { width: 100%; flex: none; }
+    .navbar { padding: 16px 20px; }
     .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 }
