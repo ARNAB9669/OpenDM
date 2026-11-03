@@ -7,15 +7,19 @@
     <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
-    <nav class="navbar"><div class="logo">Open DM Admin</div></nav>
-    <main class="admin-container"><div class="card">
-        <h2>Administrator sign in</h2>
-        <p>Only the configured administrator can access the console.</p>
+    <nav class="navbar"><a class="logo" href="/">Open DM <span>ADMIN</span></a></nav>
+    <main class="login-shell"><div class="card login-card">
+        <div class="login-mark" aria-hidden="true">OD</div>
+        <p class="eyebrow">SECURE ACCESS</p>
+        <h1>Welcome back</h1>
+        <p class="login-copy">Sign in to manage your Open DM workspaces.</p>
         <form id="login-form">
-            <input id="email" type="email" placeholder="admin@company.com" required autocomplete="email">
-            <button id="submit-btn" type="submit">Send sign-in link</button>
+            <label for="email">Administrator email</label>
+            <input id="email" type="email" placeholder="you@company.com" required autocomplete="email">
+            <button id="submit-btn" type="submit">Email me a sign-in link <span aria-hidden="true">→</span></button>
         </form>
         <div id="login-status" role="status"></div>
+        <p class="login-footnote"><span aria-hidden="true">⌑</span> Access is limited to the configured administrator.</p>
     </div></main>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/config.js"></script>
