@@ -18,11 +18,11 @@
     },
     {
       "source": "/",
-      "destination": "/public/index.html"
+      "destination": "/frontend/public/index.html"
     },
     {
       "source": "/(.*)",
-      "destination": "/public/$1"
+      "destination": "/frontend/public/$1"
     }
   ]
 }
