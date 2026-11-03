@@ -1,5 +1,6 @@
 -- OpenDM schema
 -- Run this in the Supabase SQL editor (or via `supabase db push`)
+-- Safe to run multiple times (idempotent)
 
 -- ───────────────────────────────────────────
 -- Extensions
@@ -9,7 +10,7 @@ create extension if not exists "pgcrypto"; -- for gen_random_uuid()
 -- ───────────────────────────────────────────
 -- workspaces: one row per client (the tenant boundary)
 -- ───────────────────────────────────────────
-create table workspaces (
+create table if not exists workspaces (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
   status      text not null default 'active' check (status in ('active', 'suspended', 'banned')),
@@ -20,7 +21,7 @@ create table workspaces (
 -- ───────────────────────────────────────────
 -- workspace_members: who can log into which workspace
 -- ───────────────────────────────────────────
-create table workspace_members (
+create table if not exists workspace_members (
   id            uuid primary key default gen_random_uuid(),
   workspace_id  uuid not null references workspaces(id) on delete cascade,
   user_id       uuid not null references auth.users(id) on delete cascade,
@@ -32,7 +33,7 @@ create table workspace_members (
 -- ───────────────────────────────────────────
 -- connected_accounts: the client's connected IG account + token
 -- ───────────────────────────────────────────
-create table connected_accounts (
+create table if not exists connected_accounts (
   id                 uuid primary key default gen_random_uuid(),
   workspace_id       uuid not null references workspaces(id) on delete cascade,
   platform           text not null default 'instagram' check (platform in ('instagram')),
@@ -47,7 +48,7 @@ create table connected_accounts (
 -- ───────────────────────────────────────────
 -- monitored_posts: posts the client has chosen to automate
 -- ───────────────────────────────────────────
-create table monitored_posts (
+create table if not exists monitored_posts (
   id                     uuid primary key default gen_random_uuid(),
   connected_account_id   uuid not null references connected_accounts(id) on delete cascade,
   meta_post_id           text not null,
@@ -59,7 +60,7 @@ create table monitored_posts (
 -- ───────────────────────────────────────────
 -- flows: the rule — trigger + reply text + DM text + link
 -- ───────────────────────────────────────────
-create table flows (
+create table if not exists flows (
   id                  uuid primary key default gen_random_uuid(),
   monitored_post_id   uuid not null references monitored_posts(id) on delete cascade,
   keyword_filter      text,                 -- null = trigger on any comment
@@ -74,7 +75,7 @@ create table flows (
 -- ───────────────────────────────────────────
 -- comment_events: one row per comment seen — audit trail + dedup guard
 -- ───────────────────────────────────────────
-create table comment_events (
+create table if not exists comment_events (
   id               uuid primary key default gen_random_uuid(),
   flow_id          uuid not null references flows(id) on delete cascade,
   meta_comment_id  text not null unique,     -- the dedup guard against webhook retries
@@ -89,12 +90,12 @@ create table comment_events (
 -- ───────────────────────────────────────────
 -- Indexes for common lookups
 -- ───────────────────────────────────────────
-create index idx_workspace_members_user on workspace_members(user_id);
-create index idx_connected_accounts_workspace on connected_accounts(workspace_id);
-create index idx_monitored_posts_account on monitored_posts(connected_account_id);
-create index idx_flows_post on flows(monitored_post_id);
-create index idx_comment_events_flow on comment_events(flow_id);
-create index idx_workspaces_status on workspaces(status);
+create index if not exists idx_workspace_members_user on workspace_members(user_id);
+create index if not exists idx_connected_accounts_workspace on connected_accounts(workspace_id);
+create index if not exists idx_monitored_posts_account on monitored_posts(connected_account_id);
+create index if not exists idx_flows_post on flows(monitored_post_id);
+create index if not exists idx_comment_events_flow on comment_events(flow_id);
+create index if not exists idx_workspaces_status on workspaces(status);
 
 -- ───────────────────────────────────────────
 -- Row-Level Security
@@ -124,27 +125,36 @@ as $$
   );
 $$;
 
+-- ───────────────────────────────────────────
+-- Client Workspace Policies
+-- ───────────────────────────────────────────
+
 -- workspaces: visible only to active members
+drop policy if exists "members can view their workspace" on workspaces;
 create policy "members can view their workspace"
   on workspaces for select
   using (is_workspace_member(id));
 
 -- workspace_members: visible only to members of the same workspace
+drop policy if exists "members can view workspace membership" on workspace_members;
 create policy "members can view workspace membership"
   on workspace_members for select
   using (is_workspace_member(workspace_id));
 
 -- connected_accounts: visible/editable only to members of that workspace
+drop policy if exists "members can view their connected accounts" on connected_accounts;
 create policy "members can view their connected accounts"
   on connected_accounts for select
   using (is_workspace_member(workspace_id));
 
+drop policy if exists "members can manage their connected accounts" on connected_accounts;
 create policy "members can manage their connected accounts"
   on connected_accounts for all
   using (is_workspace_member(workspace_id))
   with check (is_workspace_member(workspace_id));
 
 -- monitored_posts: scoped via connected_accounts → workspace
+drop policy if exists "members can view their monitored posts" on monitored_posts;
 create policy "members can view their monitored posts"
   on monitored_posts for select
   using (
@@ -155,6 +165,7 @@ create policy "members can view their monitored posts"
     )
   );
 
+drop policy if exists "members can manage their monitored posts" on monitored_posts;
 create policy "members can manage their monitored posts"
   on monitored_posts for all
   using (
@@ -173,6 +184,7 @@ create policy "members can manage their monitored posts"
   );
 
 -- flows: scoped via monitored_posts → connected_accounts → workspace
+drop policy if exists "members can view their flows" on flows;
 create policy "members can view their flows"
   on flows for select
   using (
@@ -184,6 +196,7 @@ create policy "members can view their flows"
     )
   );
 
+drop policy if exists "members can manage their flows" on flows;
 create policy "members can manage their flows"
   on flows for all
   using (
@@ -204,7 +217,7 @@ create policy "members can manage their flows"
   );
 
 -- comment_events: read-only for clients, scoped via flows → ... → workspace
--- (writes come only from the Cloudflare Worker using the service role key, which bypasses RLS)
+drop policy if exists "members can view their comment events" on comment_events;
 create policy "members can view their comment events"
   on comment_events for select
   using (
@@ -217,11 +230,32 @@ create policy "members can view their comment events"
     )
   );
 
--- Note: the admin panel reads/writes everything using the Supabase service role key,
--- which bypasses RLS entirely — it can always see and change `workspaces.status`
--- regardless of the policies above. No admin-specific policies needed here.
+-- ───────────────────────────────────────────
+-- Admin Policies (Replace 'your-admin-email@example.com' with your actual admin email)
+-- ───────────────────────────────────────────
 
--- Note: the Cloudflare Worker should also check `workspaces.status = 'active'`
--- before sending a reply/DM for a banned/suspended workspace's flow — RLS protects
--- the dashboard, but the Worker uses the service role key too, so it must check
--- status explicitly in its own query rather than relying on RLS to stop it.
+-- 1. Full access to view, update, manage and ban workspaces
+drop policy if exists "Admin full access workspaces" on workspaces;
+create policy "Admin full access workspaces"
+  on workspaces for all
+  using (auth.jwt() ->> 'email' = 'your-admin-email@example.com')
+  with check (auth.jwt() ->> 'email' = 'your-admin-email@example.com');
+
+-- 2. Full access to workspace members
+drop policy if exists "Admin full access workspace_members" on workspace_members;
+create policy "Admin full access workspace_members"
+  on workspace_members for all
+  using (auth.jwt() ->> 'email' = 'your-admin-email@example.com')
+  with check (auth.jwt() ->> 'email' = 'your-admin-email@example.com');
+
+-- 3. Read access to connected accounts (needed for admin dashboard stats)
+drop policy if exists "Admin full access connected_accounts" on connected_accounts;
+create policy "Admin full access connected_accounts"
+  on connected_accounts for select
+  using (auth.jwt() ->> 'email' = 'your-admin-email@example.com');
+
+-- 4. Read access to comment events (needed to show total comments processed)
+drop policy if exists "Admin full access comment_events" on comment_events;
+create policy "Admin full access comment_events"
+  on comment_events for select
+  using (auth.jwt() ->> 'email' = 'your-admin-email@example.com');
