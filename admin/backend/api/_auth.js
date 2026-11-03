@@ -12,6 +12,18 @@ export function adminClient() {
     });
 }
 
+export async function activeWorkspaceForUser(userId) {
+    const { data, error } = await adminClient()
+        .from('workspace_members')
+        .select('workspace_id, workspaces!inner(id, name, status)')
+        .eq('user_id', userId)
+        .eq('workspaces.status', 'active')
+        .limit(1)
+        .maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
 export async function requireAdmin(req, res) {
     const authorization = req.headers.authorization || '';
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : null;

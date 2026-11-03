@@ -3,7 +3,7 @@ main = "cw_web_hook.js"
 compatibility_date = "2026-01-01"
 
 [vars]
-GRAPH_API_VERSION = "v21.0"
+GRAPH_API_VERSION = "v25.0"
 
 # Secrets — do NOT put real values here. After `wrangler login`, run each of these
 # from backend/serverless, then paste the value when prompted:

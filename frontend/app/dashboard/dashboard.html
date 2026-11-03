@@ -5,10 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Workspace | Open DM</title>
     <link rel="stylesheet" href="/auth.css">
+    <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
     <nav class="navbar"><div class="logo">Open DM</div><button id="logout-btn" class="nav-btn">Sign out</button></nav>
-    <main class="admin-container"><div class="card"><h2>Your workspace</h2><p id="welcome-message">Checking your invited account…</p></div></main>
+    <main class="dashboard-container">
+        <header class="workspace-heading">
+            <p class="eyebrow">CLIENT WORKSPACE</p>
+            <h1>Your workspace</h1>
+            <p id="welcome-message">Checking your invited account…</p>
+        </header>
+
+        <p id="dashboard-notice" class="notice" role="status" aria-live="polite" hidden></p>
+
+        <section class="dashboard-card" aria-labelledby="instagram-title">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">ACCOUNT</p>
+                    <h2 id="instagram-title">Instagram</h2>
+                    <p id="account-summary" hidden></p>
+                </div>
+                <button id="connect-instagram" class="primary-button" type="button" hidden>Connect Instagram</button>
+            </div>
+            <p class="helper-text">Connect an Instagram professional account to choose a post and configure its comment automation.</p>
+            <div id="media-grid" class="media-grid" aria-live="polite"></div>
+        </section>
+
+        <section id="flow-editor" class="dashboard-card flow-editor" aria-labelledby="flow-title" hidden>
+            <p class="eyebrow">POST AUTOMATION</p>
+            <h2 id="flow-title">Configure comment automation</h2>
+            <p id="selected-media-label" class="selected-media-label"></p>
+            <form id="flow-form">
+                <label for="keyword-filter">Keyword filter <span>(optional)</span></label>
+                <input id="keyword-filter" type="text" maxlength="120" placeholder="Leave blank to match every comment">
+
+                <label for="reply-template">Public reply</label>
+                <textarea id="reply-template" rows="3" maxlength="1000" required placeholder="Thanks for your comment!"></textarea>
+
+                <label for="dm-template">Private DM text</label>
+                <textarea id="dm-template" rows="3" maxlength="900" required placeholder="Here is the information you asked for:"></textarea>
+
+                <label for="dm-link">DM link (HTTPS)</label>
+                <input id="dm-link" type="url" required placeholder="https://example.com">
+
+                <label class="toggle-label" for="flow-active">
+                    <input id="flow-active" type="checkbox">
+                    <span>Automation active</span>
+                </label>
+                <button id="save-flow" class="primary-button" type="submit">Save automation</button>
+            </form>
+        </section>
+
+        <section class="dashboard-card activity-card" aria-labelledby="activity-title">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">MONITORING</p>
+                    <h2 id="activity-title">Automation activity</h2>
+                    <p>Activity refreshes automatically about every 10 seconds.</p>
+                </div>
+                <button id="refresh-flow-status" class="secondary-button" type="button">Refresh posts and status</button>
+            </div>
+        </section>
+    </main>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/config.js"></script>
     <script src="dashboard.js"></script>

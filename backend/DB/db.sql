@@ -38,12 +38,32 @@ create table if not exists connected_accounts (
   workspace_id       uuid not null references workspaces(id) on delete cascade,
   platform           text not null default 'instagram' check (platform in ('instagram')),
   ig_account_id      text not null,
-  page_id            text not null,
+  -- Legacy Facebook Page ID; Instagram Login does not provide a Page ID.
+  page_id            text,
   long_lived_token   text not null,
   token_expires_at   timestamptz not null,
   connected_at       timestamptz not null default now(),
   unique (workspace_id, ig_account_id)
 );
+
+-- IG Login profile label used by the client dashboard. Safe for existing installs.
+alter table connected_accounts add column if not exists ig_username text;
+-- Existing installs may still have the legacy NOT NULL constraint. Instagram
+-- Login stores the Instagram account ID directly and has no Facebook Page ID.
+alter table connected_accounts alter column page_id drop not null;
+
+-- Single-use, short-lived OAuth state keeps Instagram's redirect bound to the
+-- authenticated user/workspace that initiated the connection.
+create table if not exists instagram_oauth_states (
+  state_hash   text primary key,
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  expires_at   timestamptz not null,
+  consumed_at  timestamptz,
+  created_at   timestamptz not null default now()
+);
+create index if not exists idx_instagram_oauth_states_expiry on instagram_oauth_states(expires_at);
+alter table instagram_oauth_states enable row level security;
 
 -- ───────────────────────────────────────────
 -- monitored_posts: posts the client has chosen to automate
@@ -141,17 +161,10 @@ create policy "members can view workspace membership"
   on workspace_members for select
   using (is_workspace_member(workspace_id));
 
--- connected_accounts: visible/editable only to members of that workspace
+-- Instagram tokens are secrets. Do not grant browser clients direct table
+-- access; scoped server handlers use the service role after requireUser checks.
 drop policy if exists "members can view their connected accounts" on connected_accounts;
-create policy "members can view their connected accounts"
-  on connected_accounts for select
-  using (is_workspace_member(workspace_id));
-
 drop policy if exists "members can manage their connected accounts" on connected_accounts;
-create policy "members can manage their connected accounts"
-  on connected_accounts for all
-  using (is_workspace_member(workspace_id))
-  with check (is_workspace_member(workspace_id));
 
 -- monitored_posts: scoped via connected_accounts → workspace
 drop policy if exists "members can view their monitored posts" on monitored_posts;
@@ -165,23 +178,8 @@ create policy "members can view their monitored posts"
     )
   );
 
+-- Writes to monitored_posts are only performed by workspace-authorized APIs.
 drop policy if exists "members can manage their monitored posts" on monitored_posts;
-create policy "members can manage their monitored posts"
-  on monitored_posts for all
-  using (
-    exists (
-      select 1 from connected_accounts ca
-      where ca.id = monitored_posts.connected_account_id
-      and is_workspace_member(ca.workspace_id)
-    )
-  )
-  with check (
-    exists (
-      select 1 from connected_accounts ca
-      where ca.id = monitored_posts.connected_account_id
-      and is_workspace_member(ca.workspace_id)
-    )
-  );
 
 -- flows: scoped via monitored_posts → connected_accounts → workspace
 drop policy if exists "members can view their flows" on flows;
@@ -196,25 +194,8 @@ create policy "members can view their flows"
     )
   );
 
+-- Writes to flows are only performed by workspace-authorized APIs.
 drop policy if exists "members can manage their flows" on flows;
-create policy "members can manage their flows"
-  on flows for all
-  using (
-    exists (
-      select 1 from monitored_posts mp
-      join connected_accounts ca on ca.id = mp.connected_account_id
-      where mp.id = flows.monitored_post_id
-      and is_workspace_member(ca.workspace_id)
-    )
-  )
-  with check (
-    exists (
-      select 1 from monitored_posts mp
-      join connected_accounts ca on ca.id = mp.connected_account_id
-      where mp.id = flows.monitored_post_id
-      and is_workspace_member(ca.workspace_id)
-    )
-  );
 
 -- comment_events: read-only for clients, scoped via flows → ... → workspace
 drop policy if exists "members can view their comment events" on comment_events;

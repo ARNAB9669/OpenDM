@@ -10,7 +10,7 @@
 //   SUPABASE_URL
 //   SUPABASE_SERVICE_ROLE_KEY
 //
-// GRAPH_API_VERSION can be a plain var in wrangler.toml, e.g. "v21.0"
+// GRAPH_API_VERSION can be a plain var in wrangler.toml (default: v25.0).
 
 import { createClient } from '@supabase/supabase-js';
 import { verifyMetaSignature } from '../auth/verify_meta_signature.js';
@@ -83,7 +83,7 @@ async function handleWebhookPayload(payload, env) {
             // 1. Find the monitored post -> flow -> workspace/connected account
             const { data: post } = await supabase
                 .from('monitored_posts')
-                .select('id, connected_account_id, connected_accounts(workspace_id, long_lived_token)')
+                .select('id, connected_account_id, connected_accounts(workspace_id, ig_account_id, long_lived_token)')
                 .eq('meta_post_id', metaPostId)
                 .single();
 
@@ -131,14 +131,14 @@ async function handleWebhookPayload(payload, env) {
             }
 
             const accessToken = post.connected_accounts.long_lived_token;
-            const graphVersion = env.GRAPH_API_VERSION || 'v21.0';
+            const graphVersion = env.GRAPH_API_VERSION || 'v25.0';
 
             // 5. Public reply to the comment
             let replyStatus = 'failed';
             let replyError = null;
             try {
                 const replyRes = await fetch(
-                    `https://graph.facebook.com/${graphVersion}/${metaCommentId}/replies`,
+                    `https://graph.instagram.com/${graphVersion}/${metaCommentId}/replies`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -163,7 +163,7 @@ async function handleWebhookPayload(payload, env) {
             let dmError = null;
             try {
                 const dmRes = await fetch(
-                    `https://graph.facebook.com/${graphVersion}/me/messages`,
+                    `https://graph.instagram.com/${graphVersion}/${post.connected_accounts.ig_account_id}/messages`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
