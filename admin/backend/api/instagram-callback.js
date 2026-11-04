@@ -25,6 +25,31 @@ async function graphGet(path, params) {
     return readJson(await fetch(url, { signal: AbortSignal.timeout(15000) }));
 }
 
+async function authorizedInstagramAccounts(accessToken) {
+    const assigned = await graphGet('me/assigned_instagram_accounts', {
+        fields: 'id,username',
+        access_token: accessToken
+    });
+    if (assigned.data?.length) return assigned.data;
+
+    // Unified Login tokens represent a system user, so Meta can occasionally
+    // return an empty assigned-account edge even after the browser has shared
+    // an Instagram asset. In that case, look up the business portfolio selected
+    // in that same login and list only its owned Instagram accounts.
+    const systemUser = await graphGet('me', {
+        fields: 'client_business_id',
+        access_token: accessToken
+    });
+    const businessId = systemUser.client_business_id;
+    if (!businessId) return [];
+
+    const owned = await graphGet(`${businessId}/owned_instagram_accounts`, {
+        fields: 'id,username',
+        access_token: accessToken
+    });
+    return owned.data || [];
+}
+
 export default async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).send('Method not allowed');
     const { code, state: stateValue, error: oauthError } = req.query || {};
@@ -67,33 +92,26 @@ export default async function handler(req, res) {
 
         // Unified Login returns a Business Integration System User token. The
         // authorized Instagram asset is discovered through the assigned-account edge.
-        const accounts = await graphGet('me/assigned_instagram_accounts', {
-            fields: 'id,username',
-            access_token: token.access_token
-        });
-        const availableAccounts = accounts.data || [];
+        const availableAccounts = await authorizedInstagramAccounts(token.access_token);
         if (availableAccounts.length !== 1) {
             throw new Error(availableAccounts.length
                 ? 'More than one Instagram account was authorized. Configure one account and reconnect.'
-                : 'No Instagram professional account was shared. Choose the correct business portfolio and authorize an Instagram account.');
+                : 'Meta did not return an Instagram account for the selected business portfolio. Confirm the Instagram account is owned by that portfolio and has accepted the Instagram Tester role, then reconnect.');
         }
         const profile = availableAccounts[0];
         const instagramUserId = String(profile.id || '');
         if (!instagramUserId || !profile.username) throw new Error('Meta did not return an Instagram account ID and username.');
 
-        // Unified Login configurations can issue never-expiring system-user
-        // tokens. Null means no scheduled expiry (revocation is still possible).
-        const expiresIn = Number(token.expires_in);
-        const expiresAt = Number.isFinite(expiresIn) && expiresIn > 0
-            ? new Date(Date.now() + expiresIn * 1000).toISOString()
-            : null;
         const { error: saveError } = await supabase.from('connected_accounts').upsert({
             workspace_id: state.workspaceId,
             platform: 'instagram',
             ig_account_id: instagramUserId,
             ig_username: profile.username,
             long_lived_token: token.access_token,
-            token_expires_at: expiresAt
+            // Unified Login can issue never-expiring system-user tokens. Null means no scheduled expiry (revocation is still possible).
+            token_expires_at: Number(token.expires_in) > 0
+                ? new Date(Date.now() + Number(token.expires_in) * 1000).toISOString()
+                : null
         }, { onConflict: 'workspace_id,ig_account_id' });
         if (saveError) throw saveError;
 

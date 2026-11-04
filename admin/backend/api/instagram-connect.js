@@ -9,7 +9,6 @@ export default async function handler(req, res) {
     try {
         const appId = process.env.META_APP_ID;
         if (!appId) throw new Error('Missing required server environment variable: META_APP_ID');
-        const configId = metaLoginConfigId();
         const membership = await activeWorkspaceForUser(user.id);
         if (!membership) return res.status(403).json({ error: 'No active invited workspace.' });
 
@@ -25,8 +24,10 @@ export default async function handler(req, res) {
         });
         if (error) throw error;
 
-        // New Meta apps use Instagram API Unified Login, which is backed by
-        // Facebook Login for Business and a saved configuration (config_id).
+        const configId = metaLoginConfigId();
+
+        // Use Instagram API Unified Login through the saved Login for Business
+        // configuration. Ad accounts are optional; no ad account is requested here.
         const authorizeUrl = new URL(`https://www.facebook.com/${graphVersion()}/dialog/oauth`);
         authorizeUrl.search = new URLSearchParams({
             client_id: appId,

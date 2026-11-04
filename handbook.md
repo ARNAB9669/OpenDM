@@ -61,7 +61,7 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY` in browser code, `frontend/public/confi
 https://open-dm.covelly.com/api/instagram-callback
 ```
 
-Set the exact URI in the Meta Unified Login configuration, then set its configuration ID as `META_LOGIN_CONFIG_ID` in Vercel. Unified Login uses the Meta app's App ID/secret, a `config_id` rather than OAuth `scope` values, Business Integration System User tokens, and `graph.facebook.com`. The secret is also used by the Worker for webhook signature verification, but Vercel and Cloudflare have separate secret stores. `GRAPH_API_VERSION` is optional in Vercel (defaults to `v25.0`) and set to `v25.0` in the Worker config.
+Use Meta's **Instagram API with Unified Login** setup. Register the exact callback URI above in the Login for Business configuration, then set its configuration ID as `META_LOGIN_CONFIG_ID` in Vercel. Unified Login uses the Meta app's App ID/secret, a `config_id` rather than OAuth `scope` values, Business Integration System User tokens, and `graph.facebook.com`. Ad accounts are optional for this Instagram use case. The secret is also used by the Worker for webhook signature verification, but Vercel and Cloudflare have separate secret stores. `GRAPH_API_VERSION` is optional in Vercel (defaults to `v25.0`) and set to `v25.0` in the Worker config.
 
 ### Cloudflare Worker secrets
 
@@ -88,7 +88,7 @@ Keep the invite email and magic-link email templates pointing to Supabase's gene
 
 ## Database
 
-`backend/DB/db.sql` defines workspaces, memberships, connected Instagram accounts, monitored posts, automation flows, comment-event logs, OAuth state storage, and row-level security. Run the updated SQL in Supabase before deploying these handlers; it adds `connected_accounts.ig_username`, creates the one-use OAuth-state table, allows nullable legacy Page ID and token expiry for Unified Login, removes browser RLS access to `connected_accounts` so tokens cannot be selected by a client session, and removes direct client write policies for monitored posts and flows. Those operations now go through the authorized server handlers. Review the SQL and back it up before applying schema or policy changes to production.
+`backend/DB/db.sql` defines workspaces, memberships, connected Instagram accounts, monitored posts, automation flows, comment-event logs, OAuth state storage, and row-level security. Run the updated SQL in Supabase before deploying these handlers; it adds `connected_accounts.ig_username`, creates the one-use OAuth-state table, makes Page ID and token expiry nullable, removes browser RLS access to `connected_accounts` so tokens cannot be selected by a client session, and removes direct client write policies for monitored posts and flows. Those operations now go through the authorized server handlers. Review the SQL and back it up before applying schema or policy changes to production.
 
 The API uses the service-role key on the server, so every server-side handler must enforce authorization and workspace scoping itself. Do not treat RLS as protection for server code that bypasses RLS.
 
