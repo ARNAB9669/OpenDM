@@ -35,6 +35,9 @@ export default async function handler(req, res) {
             config_id: configId,
             response_type: 'code',
             override_default_response_type: 'true',
+            // Require a fresh Meta login so the person connecting can choose
+            // the Instagram account and its owning business portfolio again.
+            prompt: 'login',
             state
         }).toString();
         return res.status(200).json({ authorizeUrl: authorizeUrl.toString() });
