@@ -30,24 +30,7 @@ async function authorizedInstagramAccounts(accessToken) {
         fields: 'id,username',
         access_token: accessToken
     });
-    if (assigned.data?.length) return assigned.data;
-
-    // Unified Login tokens represent a system user, so Meta can occasionally
-    // return an empty assigned-account edge even after the browser has shared
-    // an Instagram asset. In that case, look up the business portfolio selected
-    // in that same login and list only its owned Instagram accounts.
-    const systemUser = await graphGet('me', {
-        fields: 'client_business_id',
-        access_token: accessToken
-    });
-    const businessId = systemUser.client_business_id;
-    if (!businessId) return [];
-
-    const owned = await graphGet(`${businessId}/owned_instagram_accounts`, {
-        fields: 'id,username',
-        access_token: accessToken
-    });
-    return owned.data || [];
+    return assigned.data || [];
 }
 
 export default async function handler(req, res) {
@@ -96,7 +79,7 @@ export default async function handler(req, res) {
         if (availableAccounts.length !== 1) {
             throw new Error(availableAccounts.length
                 ? 'More than one Instagram account was authorized. Configure one account and reconnect.'
-                : 'Meta did not return an Instagram account for the selected business portfolio. Confirm the Instagram account is owned by that portfolio and has accepted the Instagram Tester role, then reconnect.');
+                : 'Meta did not expose the Instagram account to this Unified Login token. Reconnect and select the portfolio that owns the professional account. If it remains empty, this is a Meta Unified Login issue; do not create another ad account.');
         }
         const profile = availableAccounts[0];
         const instagramUserId = String(profile.id || '');
