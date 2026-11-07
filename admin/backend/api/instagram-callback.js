@@ -4,7 +4,7 @@ import { graphUrl, graphVersion, hashInstagramState, instagramRedirectUri, parse
 function dashboardRedirect(res, result, reason = '') {
     const base = process.env.APP_URL?.replace(/\/+$/, '') || '';
     const query = new URLSearchParams({ instagram: result });
-    if (reason) query.set('reason', reason.slice(0, 500));
+    if (reason) query.set('reason', reason.slice(0, 1000));
     res.statusCode = 302;
     res.setHeader('Location', `${base}/app/dashboard/dashboard.html?${query}`);
     return res.end();
@@ -168,12 +168,56 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
                     debugLogs.push(`${ep}_err:${e.message.slice(0, 25)}`);
                 }
             }
+            // Check portfolio pages (owned_pages / client_pages / primary_page)
+            try {
+                const bizPages = await graphGet(`${me.client_business_id}/owned_pages`, {
+                    fields: 'id,name,access_token,instagram_business_account{id,username}',
+                    access_token: accessToken
+                });
+                for (const p of bizPages.data || []) {
+                    if (p.instagram_business_account?.id) {
+                        addAccount(p.instagram_business_account.id, p.instagram_business_account.username || p.name, p.access_token || accessToken, String(p.id), 'page');
+                    }
+                }
+                if (accounts.length > 0) return accounts;
+            } catch (e) {
+                debugLogs.push(`biz_owned_pgs_err:${e.message.slice(0, 25)}`);
+            }
         }
     } catch (error) {
         debugLogs.push(`me_err:${error.message.slice(0, 35)}`);
     }
 
-    // ── Strategy 5: Facebook Pages (/me/accounts) ──
+    // ── Strategy 5a: System User Assigned Pages (/me/assigned_pages) ──
+    try {
+        const assignedPages = await graphGet('me/assigned_pages', {
+            fields: 'id,name,access_token,instagram_business_account{id,username}',
+            access_token: accessToken
+        });
+        debugLogs.push(`asgn_pgs_cnt:${assignedPages.data?.length ?? 0}`);
+        for (const page of assignedPages.data || []) {
+            let igAccount = page.instagram_business_account;
+            if (!igAccount?.id && page.id) {
+                try {
+                    const pageDetail = await graphGet(page.id, {
+                        fields: 'id,name,access_token,instagram_business_account{id,username}',
+                        access_token: page.access_token || accessToken
+                    });
+                    igAccount = pageDetail.instagram_business_account;
+                } catch (e) {
+                    debugLogs.push(`ap_${page.id}_err:${e.message.slice(0, 25)}`);
+                }
+            }
+            if (igAccount?.id) {
+                addAccount(igAccount.id, igAccount.username || page.name, page.access_token || accessToken, String(page.id), 'page');
+            }
+        }
+        if (accounts.length > 0) return accounts;
+    } catch (error) {
+        debugLogs.push(`asgn_pgs_err:${error.message.slice(0, 35)}`);
+    }
+
+    // ── Strategy 5b: Facebook Pages (/me/accounts) ──
     try {
         const longLivedUserToken = await getLongLivedUserToken(accessToken);
         const pages = await graphGet('me/accounts', {
@@ -259,11 +303,11 @@ export default async function handler(req, res) {
         const debugLogs = [];
         const availableAccounts = await authorizedInstagramAccounts(token.access_token, debugLogs);
         if (!availableAccounts.length) {
-            const needsBiz = debugLogs.some(l => l.includes('Requires business_management'));
+            const needsBiz = debugLogs.some(l => l.includes('business_management') || l.includes('Requires business_'));
             if (needsBiz) {
-                throw new Error('Meta requires the "business_management" permission on your configuration to read portfolio Instagram accounts. Please add "business_management" to your Login for Business configuration in the Meta App Dashboard.');
+                throw new Error(`Meta portfolio access blocked (#200 Requires business_management). Details: ${debugLogs.join(' | ').slice(0, 950)}`);
             }
-            throw new Error(`Diagnostic info: ${debugLogs.join(' | ').slice(0, 450)}`);
+            throw new Error(`Diagnostic info: ${debugLogs.join(' | ').slice(0, 950)}`);
         }
 
         const profile = availableAccounts[0];
