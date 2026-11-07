@@ -42,6 +42,12 @@ export default async function handler(req, res) {
 
         if (!response.ok) {
             console.error('Instagram media request failed:', data.error?.message || response.status);
+            // If the saved account ID is invalid (e.g. was a System User ID instead of an Instagram account node),
+            // clean up the invalid row so the workspace returns to an unlinked state ready to connect cleanly.
+            if (data.error?.code === 100 || data.error?.code === 190) {
+                await adminClient().from('connected_accounts').delete().eq('id', account.id);
+                return res.status(200).json({ connected: false, media: [] });
+            }
             return res.status(502).json({ error: `Could not load Instagram posts: ${data.error?.message || response.status}` });
         }
 
