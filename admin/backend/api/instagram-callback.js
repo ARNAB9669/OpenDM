@@ -151,6 +151,7 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
             debugLogs.push(`biz:${me.client_business_id}`);
             const endpoints = [
                 `${me.client_business_id}/instagram_accounts`,
+                `${me.client_business_id}/instagram_business_accounts`,
                 `${me.client_business_id}/assigned_instagram_accounts`,
                 `${me.client_business_id}/owned_instagram_accounts`
             ];
@@ -258,6 +259,10 @@ export default async function handler(req, res) {
         const debugLogs = [];
         const availableAccounts = await authorizedInstagramAccounts(token.access_token, debugLogs);
         if (!availableAccounts.length) {
+            const needsBiz = debugLogs.some(l => l.includes('Requires business_management'));
+            if (needsBiz) {
+                throw new Error('Meta requires the "business_management" permission on your configuration to read portfolio Instagram accounts. Please add "business_management" to your Login for Business configuration in the Meta App Dashboard.');
+            }
             throw new Error(`Diagnostic info: ${debugLogs.join(' | ').slice(0, 450)}`);
         }
 

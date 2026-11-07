@@ -29,8 +29,9 @@ Canonical client dashboard files are `frontend/app/dashboard/dashboard.html`, `d
 4. Supabase redirects to `/app/dashboard/dashboard.html` with a session.
 5. `dashboard.js` calls `/api/client-session`; the server verifies the session and checks for an active workspace membership.
 6. The dashboard requests an Instagram connection URL from `/api/instagram-connect`. The server verifies the session, creates signed one-use state bound to the workspace, and returns Instagram's authorization URL.
-7. `/api/instagram-callback` validates and consumes the state, exchanges the Unified Login code for a Business Integration System User token, discovers the shared Instagram professional account, and stores the token server-side. The dashboard never receives the token.
-8. `/api/instagram-media` returns recent media and existing flow settings for the signed-in workspace. `/api/instagram-flow` creates/reuses a monitored post and saves or updates its flow. `/api/instagram-flow-status` aggregates that flow's comment-event results. Each handler validates the user and workspace server-side.
+7. `/api/instagram-callback` validates and consumes the state, exchanges the OAuth authorization code, discovers the Instagram professional account using a multi-strategy lookup (Unified Login system user token, `debug_token` granular scopes, or Facebook Page linkage), and securely stores the per-account long-lived access token server-side. The dashboard never receives the token.
+8. `/api/instagram-media` returns recent media using the per-account token (checking both Facebook Graph and Instagram Graph hosts) and existing flow settings for the signed-in workspace. If an invalid or corrupted account node is detected, it automatically purges the row and resets the workspace.
+9. `/api/instagram-flow` creates/reuses a monitored post and saves or updates its flow. The Cloudflare Worker (`cw_web_hook.js`) verifies Meta's signature, dedupes events, filters out the account's own comments, and dispatches the public reply and private reply DM via the matching account's token. `/api/instagram-flow-status` aggregates real-time delivery metrics. Each handler validates the user and workspace server-side.
 
 Email delivery uses the SMTP provider configured in Supabase Auth (currently set up with Resend). DNS records authorize sending; they do not create a mailbox. Inbound email/receiving is separate and is not required for portal sign-in.
 
@@ -101,4 +102,88 @@ The API uses the service-role key on the server, so every server-side handler mu
 
 ## Current scope note
 
-Portal sign-in and workspace membership have been exercised. Instagram OAuth, server-side account storage/media loading, the flow builder, and per-flow status feed are implemented for Unified Login but still require the updated SQL, a Meta configuration ID in Vercel, webhook setup, deployment, and a real Instagram test before they can be called live-working. OAuth and Graph API requests use `graph.facebook.com` with Unified Login system-user tokens. End-to-end webhook delivery and DM delivery remain unverified until the manual test above succeeds.
+Portal sign-in and workspace membership have been exercised. Instagram OAuth, multi-strategy account discovery (Unified Login / Facebook Page fallback), media loading, the flow builder, and webhook delivery are fully implemented in the code. OAuth and Graph API requests support both `graph.facebook.com` and `graph.instagram.com` with per-account tokens.
+
+## Instagram Connection & Pipeline Incident & Fix Log
+
+This section documents all issues encountered during the implementation and testing of the Instagram integration, their root causes, and the concrete code and architectural fixes applied.
+
+### 1. Unified Login Asset Enumeration Failure
+* **Symptom**: `Meta did not expose the Instagram account to this Unified Login token. Reconnect and select the portfolio that owns the professional account...`
+* **Root Cause**: `instagram-callback.js` exclusively queried `GET /me/assigned_instagram_accounts`. When accounts are linked via a Facebook Page (or when Meta's Unified Login asset propagation experiences delays in Dev Mode), this endpoint returns an empty array (`{"data": []}`).
+* **Code Fix**:
+  * Implemented a multi-strategy account resolution in `authorizedInstagramAccounts()`:
+    1. Check `GET /me/assigned_instagram_accounts` for direct system user assets.
+    2. Fallback: Exchange code for long-lived user token via `fb_exchange_token` and query `GET /me/accounts?fields=id,name,access_token,instagram_business_account{id,username}`.
+    3. Added secondary check on `/{page_id}?fields=instagram_business_account` with `page.access_token` in case nested expansion was omitted.
+  * Standardized the returned account shape across all paths: `{ id, username, accessToken, pageId, tokenType }`.
+  * Saved the per-account token (`profile.accessToken`) rather than the global OAuth response token.
+
+### 2. OAuth Flexibility (Configuration ID vs. Scopes)
+* **Symptom**: Missing `META_LOGIN_CONFIG_ID` threw an unhandled 500 error preventing connection.
+* **Root Cause**: `metaLoginConfigId()` threw an error when the environment variable was omitted, preventing standard Facebook Login fallback.
+* **Code Fix**:
+  * Updated `admin/backend/api/_instagram.js` to return `process.env.META_LOGIN_CONFIG_ID || ''`.
+  * Updated `admin/backend/api/instagram-connect.js`: If `config_id` is set, it uses Login for Business. If omitted, it automatically falls back to standard Facebook Login with explicit scopes: `pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_comments,instagram_manage_messages`.
+
+### 3. Webhook Delivery Timeouts, Infinite Loops, & DM Target Routing
+* **Symptom**: Risk of Meta webhook retry storms, duplicate message delivery, and private reply failures.
+* **Root Cause**:
+  * `cw_web_hook.js` was awaiting downstream database and Graph API calls before returning HTTP 200, risking Meta's 5-second webhook delivery timeout.
+  * No check existed for whether an incoming comment was posted by the bot account itself, creating an infinite comment-reply loop.
+  * Private replies (`POST /{id}/messages`) only targeted `ig_account_id`, which fails for Page-backed Instagram accounts requiring the Page ID.
+* **Code Fix**:
+  * Added Cloudflare Worker execution context support (`ctx.waitUntil(...)`): acknowledges Meta with HTTP 200 `EVENT_RECEIVED` immediately while processing the automation in the background.
+  * Added self-reply guard: skips any comment where `commenterIgsid` equals `entry.id` or `post.connected_accounts.ig_account_id`.
+  * Added inner join lookup with `.maybeSingle()` to route webhook events strictly to the matching account.
+  * Multi-target private reply fallback: tries `[post.connected_accounts.page_id, post.connected_accounts.ig_account_id, 'me']` sequentially until successful.
+
+### 4. Graph API Error #12 & Missing Graph Version Import
+* **Symptom**: `(#12) cannot_access_user_username_f` and `ReferenceError: graphVersion is not defined`.
+* **Root Cause**:
+  * In Graph API v2.0+, querying `fields=username` on a Facebook User node throws Error 12 (`cannot_access_user_username_field is deprecated`).
+  * `graphVersion` was missing from the import list in `instagram-callback.js`.
+* **Code Fix**:
+  * Imported `graphVersion` from `./_instagram.js`.
+  * Changed the Facebook node lookup to query `fields: 'id,name'`.
+  * Added secondary lookup for username on `https://graph.instagram.com/${graphVersion()}/${targetId}?fields=id,username`.
+
+### 5. Supabase NOT NULL Database Constraint Violations
+* **Symptom**: `null value in column "token_expires_at" of relation "connected_accounts" violates not-null constraint`.
+* **Root Cause**: In production, `connected_accounts.token_expires_at` retained a legacy `NOT NULL` constraint. Because Unified Login system user tokens and Page access tokens do not expire, `null` was passed, violating the constraint. `page_id` could also trigger the same issue on unmigrated schemas.
+* **Code Fix**:
+  * In `instagram-callback.js`: if `token.expires_in` is not provided or zero, `token_expires_at` defaults to a 10-year future timestamp (`new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000).toISOString()`).
+  * `page_id` defaults to `instagramUserId` if `pageId` is null, satisfying any legacy `NOT NULL` constraint.
+
+### 6. System User Node ID vs. Instagram Account Node Confusion
+* **Symptom**: `Could not load Instagram posts: (#100) Tried accessing nonexisting field (media)`.
+* **Root Cause**:
+  * In `debug_token`, `dData.user_id` was mistakenly added to the candidate `targetIds` set. For `SYSTEM_USER` tokens, `dData.user_id` is the internal System User ID (`122096643231542100`), not an Instagram account.
+  * When saved as `ig_account_id`, querying `GET /122096643231542100/media` resulted in Meta Error 100 because User nodes do not have a `/media` edge.
+* **Code Fix**:
+  * Removed `dData.user_id` from the candidate Instagram targets in `instagram-callback.js`. Only genuine asset target IDs from `granular_scopes` or connected Pages are accepted.
+  * Enhanced `instagram-media.js` with dual-host resolution (tries `graph.facebook.com` then `graph.instagram.com`).
+  * Added auto-cleanup in `instagram-media.js`: if Meta returns Error Code 100 (nonexisting field/node) or 190 (expired/invalid), the server automatically purges the corrupted `connected_accounts` row and cleanly returns `{ connected: false, media: [] }` so the workspace can re-link without manual database intervention.
+
+### 7. Portfolio Instagram Account Resolution Blocked (#200 Requires business_management)
+* **Symptom**: `Diagnostic info: ... biz:4033576273445567 | 4033576273445567/instagram_accounts_err:(#200) Requires business_management`.
+* **Root Cause**:
+  * In Meta Login for Business (Unified Login), when a user authenticates via "Continue with Instagram", Meta creates a `SYSTEM_USER` token tied to the user's Meta Business Portfolio (`4033576273445567`).
+  * In Development Mode, Meta's `GET /me/assigned_instagram_accounts` and `debug_token.granular_scopes.target_ids` often return empty arrays (`[]`).
+  * When our resolver attempts to query the business portfolio's owned/assigned Instagram accounts via `GET /4033576273445567/instagram_accounts`, Meta rejects the query with `(#200) Requires business_management` because the Meta Login for Business configuration was created with only `instagram_basic, instagram_manage_comments, instagram_manage_messages, public_profile`.
+* **Fix**:
+  * In Meta App Dashboard -> **Facebook Login for Business** -> **Configurations** -> Edit the configuration:
+    1. Add `business_management` to the requested permissions list.
+    2. Add `pages_show_list` and `pages_read_engagement`.
+    3. Ensure **Instagram Accounts** and **Pages** are checked under Assets.
+  * Alternatively, connect using **Continue with Facebook** if the Instagram account is linked to a Facebook Page, which resolves via `me/accounts`.
+
+### 8. Recommended Production Connection Paths
+1. **Facebook Page Linkage (Recommended)**:
+   * Connect the Instagram Professional account to a Facebook Page.
+   * At login, select **Continue with Facebook**.
+   * Meta reliably exposes the linked Page and its `instagram_business_account` object via `/me/accounts`.
+2. **Instagram Credentials (Unified Login)**:
+   * At login, select **Continue with Instagram**.
+   * The Meta Login for Business configuration must have `business_management` enabled so the backend can read `/{business_id}/instagram_accounts`.
+
