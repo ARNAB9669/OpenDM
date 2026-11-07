@@ -4,7 +4,7 @@ import { graphUrl, hashInstagramState, instagramRedirectUri, parseInstagramState
 function dashboardRedirect(res, result, reason = '') {
     const base = process.env.APP_URL?.replace(/\/+$/, '') || '';
     const query = new URLSearchParams({ instagram: result });
-    if (reason) query.set('reason', reason.slice(0, 180));
+    if (reason) query.set('reason', reason.slice(0, 500));
     res.statusCode = 302;
     res.setHeader('Location', `${base}/app/dashboard/dashboard.html?${query}`);
     return res.end();
@@ -41,7 +41,7 @@ async function getLongLivedUserToken(accessToken) {
     }
 }
 
-async function authorizedInstagramAccounts(accessToken) {
+async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
     const accounts = [];
     const seenIds = new Set();
 
@@ -51,16 +51,14 @@ async function authorizedInstagramAccounts(accessToken) {
         seenIds.add(strId);
         accounts.push({
             id: strId,
-            username: username || strId,
+            username: username || `ig_${strId.slice(-4)}`,
             accessToken: token,
             pageId,
             tokenType
         });
     }
 
-    // Strategy 1: Extract authorized target_ids from debug_token granular_scopes.
-    // In Unified Login, Meta frequently returns empty for /me/assigned_instagram_accounts,
-    // but the selected Instagram Account ID is guaranteed to be in the token's granular_scopes target_ids!
+    // ── Strategy 1: debug_token granular_scopes inspection ──
     try {
         const debugUrl = new URL(graphUrl('debug_token'));
         debugUrl.search = new URLSearchParams({
@@ -68,102 +66,122 @@ async function authorizedInstagramAccounts(accessToken) {
             access_token: `${process.env.META_APP_ID || ''}|${process.env.META_APP_SECRET || ''}`
         });
         const debugRes = await readJson(await fetch(debugUrl, { signal: AbortSignal.timeout(15000) }));
-        const granularScopes = debugRes.data?.granular_scopes || [];
-        const targetIds = new Set();
+        const dData = debugRes.data || {};
+        const granular = dData.granular_scopes || [];
+        debugLogs.push(`dbg: valid=${dData.is_valid} type=${dData.type} scopes=${(dData.scopes || []).join(',')}`);
 
-        for (const gs of granularScopes) {
+        const targetIds = new Set();
+        for (const gs of granular) {
             if (Array.isArray(gs.target_ids)) {
-                for (const tid of gs.target_ids) {
-                    if (tid) targetIds.add(String(tid));
-                }
+                for (const tid of gs.target_ids) if (tid) targetIds.add(String(tid));
             }
         }
+        if (dData.user_id) targetIds.add(String(dData.user_id));
+
+        debugLogs.push(`targets:[${Array.from(targetIds).join(',')}]`);
 
         for (const targetId of targetIds) {
+            let foundUsername = null;
+            // 1. Try Facebook Graph API endpoint
             try {
-                const igUser = await graphGet(targetId, {
-                    fields: 'id,username',
-                    access_token: accessToken
-                });
-                if (igUser && igUser.id && igUser.username) {
-                    addAccount(igUser.id, igUser.username, accessToken, null, 'system_user');
+                const fbRes = await graphGet(targetId, { fields: 'id,username,name', access_token: accessToken });
+                if (fbRes.username || fbRes.name) foundUsername = fbRes.username || fbRes.name;
+            } catch (e) {
+                debugLogs.push(`t_${targetId}_fb_err:${e.message.slice(0, 35)}`);
+            }
+
+            // 2. Try Instagram Graph API endpoint
+            if (!foundUsername) {
+                try {
+                    const igUrl = new URL(`https://graph.instagram.com/${graphVersion()}/${targetId}`);
+                    igUrl.search = new URLSearchParams({ fields: 'id,username', access_token: accessToken }).toString();
+                    const igRes = await readJson(await fetch(igUrl, { signal: AbortSignal.timeout(10000) }));
+                    if (igRes.username) foundUsername = igRes.username;
+                } catch (e) {
+                    debugLogs.push(`t_${targetId}_ig_err:${e.message.slice(0, 35)}`);
                 }
-            } catch (err) {
-                console.warn(`Target ID ${targetId} inspection failed:`, err.message);
+            }
+
+            // Accept any granular target_id even if username lookup throws due to permissions/propagation delay!
+            if (targetId && (targetId !== dData.user_id || foundUsername)) {
+                addAccount(targetId, foundUsername, accessToken, null, 'system_user');
             }
         }
 
         if (accounts.length > 0) return accounts;
     } catch (error) {
-        console.warn('debug_token granular_scopes check failed:', error.message);
+        debugLogs.push(`dbg_err:${error.message.slice(0, 45)}`);
     }
 
-    // Strategy 2: Primary Unified Login endpoint (me/assigned_instagram_accounts)
+    // ── Strategy 2: graph.instagram.com/me ──
+    try {
+        const igMeUrl = new URL(`https://graph.instagram.com/${graphVersion()}/me`);
+        igMeUrl.search = new URLSearchParams({ fields: 'id,username,user_id', access_token: accessToken }).toString();
+        const igMe = await readJson(await fetch(igMeUrl, { signal: AbortSignal.timeout(10000) }));
+        const igId = igMe.user_id || igMe.id;
+        if (igId) {
+            addAccount(igId, igMe.username, accessToken, null, 'instagram_user');
+            return accounts;
+        }
+    } catch (error) {
+        debugLogs.push(`ig_me_err:${error.message.slice(0, 35)}`);
+    }
+
+    // ── Strategy 3: me/assigned_instagram_accounts ──
     try {
         const assigned = await graphGet('me/assigned_instagram_accounts', {
             fields: 'id,username',
             access_token: accessToken
         });
-        if (Array.isArray(assigned.data)) {
+        if (Array.isArray(assigned.data) && assigned.data.length > 0) {
             for (const acc of assigned.data) {
-                if (acc.id) {
-                    addAccount(acc.id, acc.username, accessToken, null, 'system_user');
-                }
+                if (acc.id) addAccount(acc.id, acc.username, accessToken, null, 'system_user');
             }
             if (accounts.length > 0) return accounts;
         }
+        debugLogs.push(`assigned_cnt:${assigned.data?.length ?? 0}`);
     } catch (error) {
-        console.warn('assigned_instagram_accounts check failed or skipped:', error.message);
+        debugLogs.push(`assigned_err:${error.message.slice(0, 35)}`);
     }
 
-    // Strategy 3: Check business portfolio owned/assigned assets via client_business_id
+    // ── Strategy 4: client_business_id ──
     try {
-        const me = await graphGet('me', {
-            fields: 'id,client_business_id',
-            access_token: accessToken
-        });
-        const businessId = me.client_business_id;
-        if (businessId) {
+        const me = await graphGet('me', { fields: 'id,client_business_id', access_token: accessToken });
+        if (me.client_business_id) {
+            debugLogs.push(`biz:${me.client_business_id}`);
             const endpoints = [
-                `${businessId}/instagram_accounts`,
-                `${businessId}/assigned_instagram_accounts`,
-                `${businessId}/owned_instagram_accounts`
+                `${me.client_business_id}/instagram_accounts`,
+                `${me.client_business_id}/assigned_instagram_accounts`,
+                `${me.client_business_id}/owned_instagram_accounts`
             ];
             for (const ep of endpoints) {
                 try {
-                    const res = await graphGet(ep, {
-                        fields: 'id,username',
-                        access_token: accessToken
-                    });
-                    if (Array.isArray(res.data)) {
+                    const res = await graphGet(ep, { fields: 'id,username', access_token: accessToken });
+                    if (Array.isArray(res.data) && res.data.length > 0) {
                         for (const acc of res.data) {
                             if (acc.id) addAccount(acc.id, acc.username, accessToken, null, 'system_user');
                         }
                     }
                     if (accounts.length > 0) return accounts;
-                } catch {
-                    // Try next endpoint
+                } catch (e) {
+                    debugLogs.push(`${ep}_err:${e.message.slice(0, 25)}`);
                 }
             }
         }
     } catch (error) {
-        console.warn('client_business_id asset inspection failed:', error.message);
+        debugLogs.push(`me_err:${error.message.slice(0, 35)}`);
     }
 
-    // Strategy 4: Fallback to Facebook Pages connection (/me/accounts)
-    // Exchange for long-lived user token so the retrieved page access tokens are permanent
-    const longLivedUserToken = await getLongLivedUserToken(accessToken);
-
+    // ── Strategy 5: Facebook Pages (/me/accounts) ──
     try {
+        const longLivedUserToken = await getLongLivedUserToken(accessToken);
         const pages = await graphGet('me/accounts', {
             fields: 'id,name,access_token,instagram_business_account{id,username}',
             access_token: longLivedUserToken
         });
-
+        debugLogs.push(`pages_cnt:${pages.data?.length ?? 0}`);
         for (const page of pages.data || []) {
             let igAccount = page.instagram_business_account;
-
-            // If instagram_business_account was not expanded on /me/accounts, try checking the page directly
             if (!igAccount?.id && page.id && page.access_token) {
                 try {
                     const pageDetail = await graphGet(page.id, {
@@ -171,39 +189,26 @@ async function authorizedInstagramAccounts(accessToken) {
                         access_token: page.access_token
                     });
                     igAccount = pageDetail.instagram_business_account;
-                } catch {
-                    // Ignore page-level lookup error and continue
-                }
+                } catch {}
             }
-
             if (igAccount?.id) {
-                addAccount(
-                    igAccount.id,
-                    igAccount.username || page.name,
-                    page.access_token,
-                    String(page.id),
-                    'page'
-                );
+                addAccount(igAccount.id, igAccount.username || page.name, page.access_token, String(page.id), 'page');
             }
         }
-
         if (accounts.length > 0) return accounts;
     } catch (error) {
-        console.warn('me/accounts fallback check failed:', error.message);
+        debugLogs.push(`pages_err:${error.message.slice(0, 35)}`);
     }
 
-    // Strategy 5: Direct /me check (if it was an Instagram-scoped user token)
+    // ── Strategy 6: Direct /me check ──
     try {
-        const directMe = await graphGet('me', {
-            fields: 'id,username',
-            access_token: accessToken
-        });
-        if (directMe && directMe.id && directMe.username) {
+        const directMe = await graphGet('me', { fields: 'id,username', access_token: accessToken });
+        if (directMe.id && directMe.username) {
             addAccount(directMe.id, directMe.username, accessToken, null, 'instagram_user');
             if (accounts.length > 0) return accounts;
         }
     } catch (error) {
-        console.warn('direct /me check failed:', error.message);
+        debugLogs.push(`direct_me_err:${error.message.slice(0, 35)}`);
     }
 
     return accounts;
@@ -250,9 +255,10 @@ export default async function handler(req, res) {
         if (!token.access_token) throw new Error('Meta did not return an access token.');
 
         // Discovers authorized Instagram account via Unified Login or Facebook Page link
-        const availableAccounts = await authorizedInstagramAccounts(token.access_token);
+        const debugLogs = [];
+        const availableAccounts = await authorizedInstagramAccounts(token.access_token, debugLogs);
         if (!availableAccounts.length) {
-            throw new Error('Meta did not return any connected Instagram Professional Account. Ensure your Instagram account is a Professional (Business or Creator) account, connected to a Facebook Page or claimed in your Meta Business Portfolio, and authorized during login.');
+            throw new Error(`Diagnostic info: ${debugLogs.join(' | ').slice(0, 450)}`);
         }
 
         const profile = availableAccounts[0];
