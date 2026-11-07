@@ -37,14 +37,11 @@ export default async function handler(req, res) {
             state
         };
 
-        if (configId) {
-            // Instagram API Unified Login through saved Login for Business configuration
-            searchParams.config_id = configId;
-            searchParams.override_default_response_type = 'true';
-        } else {
-            // Standard Facebook Login fallback requesting needed permissions directly
-            searchParams.scope = 'pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_comments,instagram_manage_messages';
-        }
+        // Use standard Facebook Login with explicit scopes.
+        // This returns a USER access token (not a System User token), which cleanly
+        // resolves the user's Facebook Page and linked Instagram account via /me/accounts
+        // without hitting Meta Error 200 "Requires business_management".
+        searchParams.scope = 'pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_comments,instagram_manage_messages';
 
         authorizeUrl.search = new URLSearchParams(searchParams).toString();
         return res.status(200).json({ authorizeUrl: authorizeUrl.toString() });

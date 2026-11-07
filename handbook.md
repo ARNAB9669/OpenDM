@@ -178,12 +178,23 @@ This section documents all issues encountered during the implementation and test
     3. Ensure **Instagram Accounts** and **Pages** are checked under Assets.
   * Alternatively, connect using **Continue with Facebook** if the Instagram account is linked to a Facebook Page, which resolves via `me/accounts`.
 
-### 8. Recommended Production Connection Paths
-1. **Facebook Page Linkage (Recommended)**:
+### 8. System User Limitation & Transition to Standard Scopes
+* **Symptom**: `Meta portfolio access blocked (#200 Requires business_management)`. All System User endpoints return 0 assets (`asgn_pgs_cnt:0, pages_cnt:0, assigned_cnt:0, targets:[]`).
+* **Root Cause**:
+  * Unified Login (`config_id`) generates a `SYSTEM_USER` token.
+  * In Development Mode, Meta strictly blocks System User tokens from enumerating portfolio assets unless the app has completed Business Verification and Advanced Access review for `business_management`.
+  * External System User tokens cannot resolve client assets without explicit manual portfolio assignment in Meta Business Suite.
+* **Fix**:
+  * Transitioned `instagram-connect.js` to standard Facebook Login with explicit scopes (`pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_comments,instagram_manage_messages`).
+  * Generates a standard `USER` access token, prompting the user directly to select their Page (e.g. `OD`) and linked Instagram account (e.g. `nope_not_gonna_tell`).
+  * Resolved cleanly via `/me/accounts` without hitting Meta Error 200 `Requires business_management`.
+
+### 9. Recommended Production Connection Paths
+1. **Facebook Page Linkage (Standard User Token - Active)**:
    * Connect the Instagram Professional account to a Facebook Page.
-   * At login, select **Continue with Facebook**.
-   * Meta reliably exposes the linked Page and its `instagram_business_account` object via `/me/accounts`.
-2. **Instagram Credentials (Unified Login)**:
-   * At login, select **Continue with Instagram**.
-   * The Meta Login for Business configuration must have `business_management` enabled so the backend can read `/{business_id}/instagram_accounts`.
+   * Prompts user for Page and Instagram account selection in OAuth dialog.
+   * Exposes the linked Page and its `instagram_business_account` object reliably via `/me/accounts`.
+2. **Instagram Credentials (Unified Login System User)**:
+   * Requires Advanced Access and Meta Business Verification for `business_management`.
+
 
