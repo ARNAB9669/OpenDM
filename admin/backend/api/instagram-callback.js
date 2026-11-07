@@ -144,48 +144,57 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
         debugLogs.push(`assigned_err:${error.message.slice(0, 35)}`);
     }
 
-    // ── Strategy 4: client_business_id ──
+    // ── Strategy 4: Businesses (client_business_id for System User, me/businesses for User) ──
+    const businessIds = new Set();
     try {
-        const me = await graphGet('me', { fields: 'id,client_business_id', access_token: accessToken });
-        if (me.client_business_id) {
-            debugLogs.push(`biz:${me.client_business_id}`);
-            const endpoints = [
-                `${me.client_business_id}/instagram_accounts`,
-                `${me.client_business_id}/instagram_business_accounts`,
-                `${me.client_business_id}/assigned_instagram_accounts`,
-                `${me.client_business_id}/owned_instagram_accounts`
-            ];
-            for (const ep of endpoints) {
-                try {
-                    const res = await graphGet(ep, { fields: 'id,username', access_token: accessToken });
-                    if (Array.isArray(res.data) && res.data.length > 0) {
-                        for (const acc of res.data) {
-                            if (acc.id) addAccount(acc.id, acc.username, accessToken, null, 'system_user');
-                        }
-                    }
-                    if (accounts.length > 0) return accounts;
-                } catch (e) {
-                    debugLogs.push(`${ep}_err:${e.message.slice(0, 25)}`);
-                }
-            }
-            // Check portfolio pages (owned_pages / client_pages / primary_page)
+        const me = await graphGet('me', { fields: 'id,client_business_id', access_token: accessToken }).catch(() => null);
+        if (me?.client_business_id) businessIds.add(String(me.client_business_id));
+    } catch {}
+
+    try {
+        const userBiz = await graphGet('me/businesses', { fields: 'id,name', access_token: accessToken }).catch(() => null);
+        if (Array.isArray(userBiz?.data)) {
+            for (const b of userBiz.data) if (b.id) businessIds.add(String(b.id));
+        }
+        debugLogs.push(`biz_cnt:${businessIds.size}`);
+    } catch (e) {
+        debugLogs.push(`biz_err:${e.message.slice(0, 25)}`);
+    }
+
+    for (const bizId of businessIds) {
+        debugLogs.push(`biz:${bizId}`);
+        const endpoints = [
+            `${bizId}/instagram_accounts`,
+            `${bizId}/instagram_business_accounts`,
+            `${bizId}/assigned_instagram_accounts`,
+            `${bizId}/owned_instagram_accounts`,
+            `${bizId}/owned_pages`,
+            `${bizId}/client_pages`
+        ];
+        for (const ep of endpoints) {
             try {
-                const bizPages = await graphGet(`${me.client_business_id}/owned_pages`, {
-                    fields: 'id,name,access_token,instagram_business_account{id,username}',
+                const res = await graphGet(ep, {
+                    fields: 'id,username,name,access_token,instagram_business_account{id,username}',
                     access_token: accessToken
                 });
-                for (const p of bizPages.data || []) {
-                    if (p.instagram_business_account?.id) {
-                        addAccount(p.instagram_business_account.id, p.instagram_business_account.username || p.name, p.access_token || accessToken, String(p.id), 'page');
+                for (const item of res.data || []) {
+                    if (item.instagram_business_account?.id) {
+                        addAccount(
+                            item.instagram_business_account.id,
+                            item.instagram_business_account.username || item.name,
+                            item.access_token || accessToken,
+                            String(item.id),
+                            'page'
+                        );
+                    } else if (item.id && (item.username || ep.includes('instagram'))) {
+                        addAccount(item.id, item.username || item.name, accessToken, null, 'business_asset');
                     }
                 }
                 if (accounts.length > 0) return accounts;
             } catch (e) {
-                debugLogs.push(`biz_owned_pgs_err:${e.message.slice(0, 25)}`);
+                debugLogs.push(`${ep.slice(-15)}_err:${e.message.slice(0, 20)}`);
             }
         }
-    } catch (error) {
-        debugLogs.push(`me_err:${error.message.slice(0, 35)}`);
     }
 
     // ── Strategy 5a: System User Assigned Pages (/me/assigned_pages) ──
@@ -247,10 +256,15 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
 
     // ── Strategy 6: Direct /me check ──
     try {
-        const directMe = await graphGet('me', { fields: 'id,username', access_token: accessToken });
-        if (directMe.id && directMe.username) {
-            addAccount(directMe.id, directMe.username, accessToken, null, 'instagram_user');
-            if (accounts.length > 0) return accounts;
+        const directMe = await graphGet('me', { fields: 'id,name', access_token: accessToken });
+        if (directMe.id) {
+            try {
+                const igUser = await graphGet(directMe.id, { fields: 'id,username', access_token: accessToken });
+                if (igUser.username) {
+                    addAccount(igUser.id, igUser.username, accessToken, null, 'instagram_user');
+                    if (accounts.length > 0) return accounts;
+                }
+            } catch {}
         }
     } catch (error) {
         debugLogs.push(`direct_me_err:${error.message.slice(0, 35)}`);

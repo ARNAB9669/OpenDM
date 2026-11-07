@@ -37,8 +37,8 @@ export default async function handler(req, res) {
             state
         };
 
-        // Standard Facebook Login with valid scopes (omitting deprecated pages_read_engagement)
-        searchParams.scope = 'pages_show_list,instagram_basic,instagram_manage_comments,instagram_manage_messages';
+        // Standard Facebook Login requesting pages, business management, and Instagram scopes
+        searchParams.scope = 'pages_show_list,business_management,instagram_basic,instagram_manage_comments,instagram_manage_messages';
 
         authorizeUrl.search = new URLSearchParams(searchParams).toString();
         return res.status(200).json({ authorizeUrl: authorizeUrl.toString() });

@@ -185,9 +185,10 @@ This section documents all issues encountered during the implementation and test
   * In Development Mode, Meta strictly blocks System User tokens from enumerating portfolio assets unless the app has completed Business Verification and Advanced Access review for `business_management`.
   * External System User tokens cannot resolve client assets without explicit manual portfolio assignment in Meta Business Suite.
 * **Fix**:
-  * Transitioned `instagram-connect.js` to standard Facebook Login with explicit scopes (`pages_show_list,instagram_basic,instagram_manage_comments,instagram_manage_messages`, omitting the deprecated `pages_read_engagement` scope).
+  * Transitioned `instagram-connect.js` to standard Facebook Login with explicit scopes (`pages_show_list,business_management,instagram_basic,instagram_manage_comments,instagram_manage_messages`).
   * Generates a standard `USER` access token, prompting the user directly to select their Page (e.g. `OD`) and linked Instagram account (e.g. `nope_not_gonna_tell`).
-  * Resolved cleanly via `/me/accounts` without hitting Meta Error 200 `Requires business_management`.
+  * In `instagram-callback.js`, enhanced Strategy 4 to query both `me.client_business_id` (System User) and `me/businesses` (User tokens) to discover all portfolio Instagram accounts and owned pages cleanly.
+
 
 ### 9. Recommended Production Connection Paths
 1. **Facebook Page Linkage (Standard User Token - Active)**:
