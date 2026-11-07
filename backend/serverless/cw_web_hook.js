@@ -16,7 +16,7 @@ import { createClient } from '@supabase/supabase-js';
 import { verifyMetaSignature } from '../auth/verify_meta_signature.js';
 
 export default {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
         const url = new URL(request.url);
 
         // ── Meta's one-time webhook verification (GET) ──
@@ -26,7 +26,10 @@ export default {
             const challenge = url.searchParams.get('hub.challenge');
 
             if (mode === 'subscribe' && token === env.META_VERIFY_TOKEN) {
-                return new Response(challenge, { status: 200 });
+                return new Response(challenge, {
+                    status: 200,
+                    headers: { 'Content-Type': 'text/plain' }
+                });
             }
             return new Response('Forbidden', { status: 403 });
         }
@@ -41,23 +44,28 @@ export default {
                 return new Response('Invalid signature', { status: 401 });
             }
 
-            // Acknowledge Meta immediately; do the work, but don't let a slow
-            // downstream call risk Meta's delivery timeout/retry storm.
-            const payload = JSON.parse(rawBody);
-            const ack = new Response('EVENT_RECEIVED', { status: 200 });
+            let payload;
+            try {
+                payload = JSON.parse(rawBody);
+            } catch {
+                return new Response('Bad request payload', { status: 400 });
+            }
 
-            // Fire-and-handle in the background (Workers support this via waitUntil
-            // if you have access to the execution context; simplest here is to just
-            // await it since Instagram comment volume at this scale is low).
+            // Immediately ACK Meta to avoid webhook timeouts and retry storms.
+            // If the Cloudflare Worker execution context is available, process in background.
+            if (ctx && typeof ctx.waitUntil === 'function') {
+                ctx.waitUntil(handleWebhookPayload(payload, env).catch((err) => {
+                    console.error('Background webhook handling error:', err);
+                }));
+                return new Response('EVENT_RECEIVED', { status: 200 });
+            }
+
             try {
                 await handleWebhookPayload(payload, env);
             } catch (err) {
-                console.error('webhook handling error:', err);
-                // Still return 200 to Meta — the error is already logged to Supabase
-                // inside handleWebhookPayload where possible.
+                console.error('Webhook handling error:', err);
             }
-
-            return ack;
+            return new Response('EVENT_RECEIVED', { status: 200 });
         }
 
         return new Response('Not found', { status: 404 });
@@ -68,43 +76,64 @@ async function handleWebhookPayload(payload, env) {
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
 
     for (const entry of payload.entry || []) {
+        const entryIgId = String(entry.id || '');
+
         for (const change of entry.changes || []) {
             if (change.field !== 'comments') continue;
 
             const comment = change.value;
+            if (!comment) continue;
+
             const metaCommentId = comment.id || comment.comment_id;
             const metaPostId = comment.media?.id || comment.post_id;
-            const commenterIgsid = comment.from?.id;
-            const commenterName = comment.from?.username || comment.from?.name;
+            const commenterIgsid = String(comment.from?.id || '');
+            const commenterName = comment.from?.username || comment.from?.name || '';
             const commentText = comment.text || '';
 
             if (!metaCommentId || !metaPostId) continue;
 
-            // 1. Find the monitored post -> flow -> workspace/connected account
-            const { data: post } = await supabase
-                .from('monitored_posts')
-                .select('id, connected_account_id, connected_accounts(workspace_id, ig_account_id, long_lived_token)')
-                .eq('meta_post_id', metaPostId)
-                .single();
+            // Self-reply prevention: Don't trigger automations on the account's own comments/replies
+            if (commenterIgsid && entryIgId && commenterIgsid === entryIgId) {
+                continue;
+            }
 
-            if (!post) continue; // not a monitored post, ignore
+            // 1. Find the monitored post -> flow -> workspace/connected account
+            let query = supabase
+                .from('monitored_posts')
+                .select('id, connected_account_id, connected_accounts!inner(id, workspace_id, ig_account_id, page_id, long_lived_token)')
+                .eq('meta_post_id', metaPostId);
+
+            if (entryIgId) {
+                query = query.eq('connected_accounts.ig_account_id', entryIgId);
+            }
+
+            const { data: post, error: postError } = await query.maybeSingle();
+            if (postError) {
+                console.error('Monitored post lookup failed:', postError.message);
+                continue;
+            }
+            if (!post || !post.connected_accounts) continue;
+
+            // Additional self-reply guard against the connected account ID
+            if (commenterIgsid && commenterIgsid === String(post.connected_accounts.ig_account_id)) {
+                continue;
+            }
 
             const { data: flow } = await supabase
                 .from('flows')
                 .select('*')
                 .eq('monitored_post_id', post.id)
                 .eq('is_active', true)
-                .single();
+                .maybeSingle();
 
             if (!flow) continue; // no active flow for this post
 
-            // 2. Confirm the workspace is still active — the Worker uses the
-            // service role key (bypasses RLS), so this check is NOT optional.
+            // 2. Confirm the workspace is still active
             const { data: workspace } = await supabase
                 .from('workspaces')
                 .select('status')
                 .eq('id', post.connected_accounts.workspace_id)
-                .single();
+                .maybeSingle();
 
             if (!workspace || workspace.status !== 'active') continue;
 
@@ -126,7 +155,7 @@ async function handleWebhookPayload(payload, env) {
                 .single();
 
             if (insertError) {
-                // likely a duplicate (unique constraint) — already handled, skip silently
+                // duplicate comment event — already handled, skip silently
                 continue;
             }
 
@@ -148,7 +177,7 @@ async function handleWebhookPayload(payload, env) {
                         })
                     }
                 );
-                const replyJson = await replyRes.json();
+                const replyJson = await replyRes.json().catch(() => ({}));
                 if (replyRes.ok) {
                     replyStatus = 'sent';
                 } else {
@@ -159,29 +188,41 @@ async function handleWebhookPayload(payload, env) {
             }
 
             // 6. Private reply DM
+            // For Page-connected Instagram accounts, routing through the page ID is supported;
+            // for Unified Login System Users, routing through ig_account_id or 'me' is used.
             let dmStatus = 'failed';
             let dmError = null;
-            try {
-                const dmRes = await fetch(
-                    `https://graph.facebook.com/${graphVersion}/${post.connected_accounts.ig_account_id}/messages`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            recipient: { comment_id: metaCommentId },
-                            message: { text: `${flow.dm_template}\n${flow.dm_link}` },
-                            access_token: accessToken
-                        })
+            const messageTargets = [
+                post.connected_accounts.page_id,
+                post.connected_accounts.ig_account_id,
+                'me'
+            ].filter(Boolean);
+
+            for (const targetId of messageTargets) {
+                try {
+                    const dmRes = await fetch(
+                        `https://graph.facebook.com/${graphVersion}/${targetId}/messages`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                recipient: { comment_id: metaCommentId },
+                                message: { text: `${flow.dm_template}\n${flow.dm_link}`.trim() },
+                                access_token: accessToken
+                            })
+                        }
+                    );
+                    const dmJson = await dmRes.json().catch(() => ({}));
+                    if (dmRes.ok) {
+                        dmStatus = 'sent';
+                        dmError = null;
+                        break;
+                    } else {
+                        dmError = JSON.stringify(dmJson.error || dmJson);
                     }
-                );
-                const dmJson = await dmRes.json();
-                if (dmRes.ok) {
-                    dmStatus = 'sent';
-                } else {
-                    dmError = JSON.stringify(dmJson.error || dmJson);
+                } catch (err) {
+                    dmError = err.message;
                 }
-            } catch (err) {
-                dmError = err.message;
             }
 
             // 7. Log the outcome

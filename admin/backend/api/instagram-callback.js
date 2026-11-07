@@ -25,12 +25,88 @@ async function graphGet(path, params) {
     return readJson(await fetch(url, { signal: AbortSignal.timeout(15000) }));
 }
 
+async function getLongLivedUserToken(accessToken) {
+    try {
+        const exchangeUrl = new URL(graphUrl('oauth/access_token'));
+        exchangeUrl.search = new URLSearchParams({
+            grant_type: 'fb_exchange_token',
+            client_id: process.env.META_APP_ID || '',
+            client_secret: process.env.META_APP_SECRET || '',
+            fb_exchange_token: accessToken
+        });
+        const data = await readJson(await fetch(exchangeUrl, { signal: AbortSignal.timeout(15000) }));
+        return data.access_token || accessToken;
+    } catch {
+        return accessToken;
+    }
+}
+
 async function authorizedInstagramAccounts(accessToken) {
-    const assigned = await graphGet('me/assigned_instagram_accounts', {
-        fields: 'id,username',
-        access_token: accessToken
-    });
-    return assigned.data || [];
+    // 1. Primary path: Instagram API with Unified Login / Business Integration System User asset check
+    try {
+        const assigned = await graphGet('me/assigned_instagram_accounts', {
+            fields: 'id,username',
+            access_token: accessToken
+        });
+        if (Array.isArray(assigned.data) && assigned.data.length > 0) {
+            return assigned.data.map((acc) => ({
+                id: String(acc.id),
+                username: acc.username,
+                accessToken, // Unified Login System-User token is authorized across all assigned assets
+                pageId: null,
+                tokenType: 'system_user'
+            }));
+        }
+    } catch (error) {
+        console.warn('assigned_instagram_accounts check failed or skipped:', error.message);
+    }
+
+    // 2. Fallback path: Classic Facebook Pages connection (/me/accounts)
+    // Exchange for long-lived user token so the retrieved page access tokens are permanent
+    const longLivedUserToken = await getLongLivedUserToken(accessToken);
+
+    try {
+        const pages = await graphGet('me/accounts', {
+            fields: 'id,name,access_token,instagram_business_account{id,username}',
+            access_token: longLivedUserToken
+        });
+
+        const accounts = [];
+        for (const page of pages.data || []) {
+            let igAccount = page.instagram_business_account;
+
+            // If instagram_business_account was not expanded on /me/accounts, try checking the page directly
+            if (!igAccount?.id && page.id && page.access_token) {
+                try {
+                    const pageDetail = await graphGet(page.id, {
+                        fields: 'instagram_business_account{id,username}',
+                        access_token: page.access_token
+                    });
+                    igAccount = pageDetail.instagram_business_account;
+                } catch {
+                    // Ignore page-level lookup error and continue
+                }
+            }
+
+            if (igAccount?.id) {
+                accounts.push({
+                    id: String(igAccount.id),
+                    username: igAccount.username || page.name,
+                    accessToken: page.access_token, // Crucial: per-page access token for Graph API calls
+                    pageId: String(page.id),
+                    tokenType: 'page'
+                });
+            }
+        }
+
+        if (accounts.length > 0) {
+            return accounts;
+        }
+    } catch (error) {
+        console.warn('me/accounts fallback check failed:', error.message);
+    }
+
+    return [];
 }
 
 export default async function handler(req, res) {
@@ -73,35 +149,39 @@ export default async function handler(req, res) {
         const token = await readJson(await fetch(tokenUrl, { signal: AbortSignal.timeout(15000) }));
         if (!token.access_token) throw new Error('Meta did not return an access token.');
 
-        // Unified Login returns a Business Integration System User token. The
-        // authorized Instagram asset is discovered through the assigned-account edge.
+        // Discovers authorized Instagram account via Unified Login or Facebook Page link
         const availableAccounts = await authorizedInstagramAccounts(token.access_token);
-        if (availableAccounts.length !== 1) {
-            throw new Error(availableAccounts.length
-                ? 'More than one Instagram account was authorized. Configure one account and reconnect.'
-                : 'Meta did not expose the Instagram account to this Unified Login token. Reconnect and select the portfolio that owns the professional account. If it remains empty, this is a Meta Unified Login issue; do not create another ad account.');
+        if (!availableAccounts.length) {
+            throw new Error('Meta did not return any connected Instagram Professional Account. Ensure your Instagram account is a Professional (Business or Creator) account, connected to a Facebook Page or claimed in your Meta Business Portfolio, and authorized during login.');
         }
+
         const profile = availableAccounts[0];
         const instagramUserId = String(profile.id || '');
         if (!instagramUserId || !profile.username) throw new Error('Meta did not return an Instagram account ID and username.');
+
+        // Token expiry:
+        // Page access tokens obtained from long-lived user tokens do not expire (expires_at is null).
+        // System user tokens from Unified Login also have no expiry or long expiry.
+        // If a finite expires_in was returned on the token exchange, calculate expiry.
+        let expiresAt = null;
+        if (profile.tokenType !== 'page' && Number(token.expires_in) > 0) {
+            expiresAt = new Date(Date.now() + Number(token.expires_in) * 1000).toISOString();
+        }
 
         const { error: saveError } = await supabase.from('connected_accounts').upsert({
             workspace_id: state.workspaceId,
             platform: 'instagram',
             ig_account_id: instagramUserId,
             ig_username: profile.username,
-            long_lived_token: token.access_token,
-            // Unified Login can issue never-expiring system-user tokens. Null means no scheduled expiry (revocation is still possible).
-            token_expires_at: Number(token.expires_in) > 0
-                ? new Date(Date.now() + Number(token.expires_in) * 1000).toISOString()
-                : null
+            page_id: profile.pageId || null,
+            long_lived_token: profile.accessToken,
+            token_expires_at: expiresAt
         }, { onConflict: 'workspace_id,ig_account_id' });
         if (saveError) throw saveError;
 
-        // Subscribe this account to comment webhooks. The app-level webhook URL
-        // and the `comments` field still need to be configured in Meta.
+        // Subscribe this account to comment webhooks using the per-account token.
         const subscribeUrl = new URL(graphUrl(`${instagramUserId}/subscribed_apps`));
-        subscribeUrl.search = new URLSearchParams({ access_token: token.access_token }).toString();
+        subscribeUrl.search = new URLSearchParams({ access_token: profile.accessToken }).toString();
         const subscribeBody = new URLSearchParams({ subscribed_fields: 'comments' });
         let webhookWarning = '';
         try {
@@ -113,7 +193,24 @@ export default async function handler(req, res) {
             }));
         } catch (error) {
             console.error('Instagram account webhook subscription failed:', error.message);
-            webhookWarning = 'webhook';
+            // If page-backed, also try subscribing the Page for feed/comment updates
+            if (profile.pageId) {
+                try {
+                    const pageSubUrl = new URL(graphUrl(`${profile.pageId}/subscribed_apps`));
+                    pageSubUrl.search = new URLSearchParams({ access_token: profile.accessToken }).toString();
+                    await readJson(await fetch(pageSubUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ subscribed_fields: 'feed' }),
+                        signal: AbortSignal.timeout(15000)
+                    }));
+                } catch (pageError) {
+                    console.error('Page webhook subscription also failed:', pageError.message);
+                    webhookWarning = 'webhook';
+                }
+            } else {
+                webhookWarning = 'webhook';
+            }
         }
 
         return dashboardRedirect(res, webhookWarning ? 'connected-warning' : 'connected');

@@ -26,20 +26,27 @@ export default async function handler(req, res) {
 
         const configId = metaLoginConfigId();
 
-        // Use Instagram API Unified Login through the saved Login for Business
-        // configuration. Ad accounts are optional; no ad account is requested here.
         const authorizeUrl = new URL(`https://www.facebook.com/${graphVersion()}/dialog/oauth`);
-        authorizeUrl.search = new URLSearchParams({
+        const searchParams = {
             client_id: appId,
             redirect_uri: instagramRedirectUri(),
-            config_id: configId,
             response_type: 'code',
-            override_default_response_type: 'true',
             // Require a fresh Meta login so the person connecting can choose
             // the Instagram account and its owning business portfolio again.
             prompt: 'login',
             state
-        }).toString();
+        };
+
+        if (configId) {
+            // Instagram API Unified Login through saved Login for Business configuration
+            searchParams.config_id = configId;
+            searchParams.override_default_response_type = 'true';
+        } else {
+            // Standard Facebook Login fallback requesting needed permissions directly
+            searchParams.scope = 'pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_comments,instagram_manage_messages';
+        }
+
+        authorizeUrl.search = new URLSearchParams(searchParams).toString();
         return res.status(200).json({ authorizeUrl: authorizeUrl.toString() });
     } catch (error) {
         console.error('Instagram connect setup failed:', error.message);

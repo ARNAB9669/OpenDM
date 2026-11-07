@@ -56,9 +56,7 @@ export function graphUrl(path) {
 }
 
 export function metaLoginConfigId() {
-    const value = process.env.META_LOGIN_CONFIG_ID;
-    if (!value) throw new Error('Missing required server environment variable: META_LOGIN_CONFIG_ID');
-    return value;
+    return process.env.META_LOGIN_CONFIG_ID || '';
 }
 
 function requiredAppSecret() {

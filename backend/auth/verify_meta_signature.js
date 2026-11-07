@@ -4,9 +4,9 @@
 // Import this into cw_web_hook.js.
 
 export async function verifyMetaSignature(rawBody, signatureHeader, appSecret) {
-    if (!signatureHeader) return false;
+    if (!signatureHeader || !appSecret || typeof rawBody !== 'string') return false;
 
-    const expected = signatureHeader.replace('sha256=', '');
+    const expected = signatureHeader.startsWith('sha256=') ? signatureHeader.slice(7) : signatureHeader;
 
     const encoder = new TextEncoder();
     const keyData = encoder.encode(appSecret);
