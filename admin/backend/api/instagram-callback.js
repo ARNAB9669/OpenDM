@@ -267,20 +267,20 @@ export default async function handler(req, res) {
         if (!instagramUserId || !profile.username) throw new Error('Meta did not return an Instagram account ID and username.');
 
         // Token expiry:
-        // Page access tokens obtained from long-lived user tokens do not expire (expires_at is null).
-        // System user tokens from Unified Login also have no expiry or long expiry.
-        // If a finite expires_in was returned on the token exchange, calculate expiry.
-        let expiresAt = null;
-        if (profile.tokenType !== 'page' && Number(token.expires_in) > 0) {
-            expiresAt = new Date(Date.now() + Number(token.expires_in) * 1000).toISOString();
-        }
+        // System user and page access tokens do not expire, but legacy database schema
+        // may have a NOT NULL constraint on token_expires_at. Default to 10 years if no expiry given.
+        const expiresInSec = Number(token.expires_in);
+        const expiresAt = Number.isFinite(expiresInSec) && expiresInSec > 0
+            ? new Date(Date.now() + expiresInSec * 1000).toISOString()
+            : new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000).toISOString();
 
         const { error: saveError } = await supabase.from('connected_accounts').upsert({
             workspace_id: state.workspaceId,
             platform: 'instagram',
             ig_account_id: instagramUserId,
             ig_username: profile.username,
-            page_id: profile.pageId || null,
+            // Fall back to instagramUserId in case the live database table still has a NOT NULL constraint on page_id
+            page_id: profile.pageId || instagramUserId,
             long_lived_token: profile.accessToken,
             token_expires_at: expiresAt
         }, { onConflict: 'workspace_id,ig_account_id' });
