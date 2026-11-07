@@ -76,7 +76,6 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
                 for (const tid of gs.target_ids) if (tid) targetIds.add(String(tid));
             }
         }
-        if (dData.user_id) targetIds.add(String(dData.user_id));
 
         debugLogs.push(`targets:[${Array.from(targetIds).join(',')}]`);
 

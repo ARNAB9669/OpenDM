@@ -1,5 +1,5 @@
 import { activeWorkspaceForUser, adminClient, requireUser } from './_auth.js';
-import { graphUrl } from './_instagram.js';
+import { graphUrl, graphVersion } from './_instagram.js';
 
 export default async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -18,17 +18,31 @@ export default async function handler(req, res) {
         if (accountError) throw accountError;
         if (!account) return res.status(200).json({ connected: false, media: [] });
 
-        const url = new URL(graphUrl(`${account.ig_account_id}/media`));
-        url.search = new URLSearchParams({
+        const searchParams = new URLSearchParams({
             fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp',
             limit: '24',
             access_token: account.long_lived_token
         }).toString();
-        const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        const data = await response.json().catch(() => ({}));
+
+        // 1. Try Facebook Graph API host
+        let response = await fetch(`${graphUrl(`${account.ig_account_id}/media`)}?${searchParams}`, { signal: AbortSignal.timeout(15000) });
+        let data = await response.json().catch(() => ({}));
+
+        // 2. Try Instagram Graph API host if Facebook host failed
+        if (!response.ok) {
+            try {
+                const igUrl = `https://graph.instagram.com/${graphVersion()}/${account.ig_account_id}/media?${searchParams}`;
+                const igRes = await fetch(igUrl, { signal: AbortSignal.timeout(15000) });
+                if (igRes.ok) {
+                    response = igRes;
+                    data = await igRes.json().catch(() => ({}));
+                }
+            } catch {}
+        }
+
         if (!response.ok) {
             console.error('Instagram media request failed:', data.error?.message || response.status);
-            return res.status(502).json({ error: 'Could not load Instagram posts. The connection may need to be renewed.' });
+            return res.status(502).json({ error: `Could not load Instagram posts: ${data.error?.message || response.status}` });
         }
 
         const configured = new Map((account.monitored_posts || []).map((post) => [
