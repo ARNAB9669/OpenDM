@@ -1,5 +1,5 @@
 import { adminClient, activeWorkspaceForUser } from './_auth.js';
-import { graphUrl, hashInstagramState, instagramRedirectUri, parseInstagramState } from './_instagram.js';
+import { graphUrl, graphVersion, hashInstagramState, instagramRedirectUri, parseInstagramState } from './_instagram.js';
 
 function dashboardRedirect(res, result, reason = '') {
     const base = process.env.APP_URL?.replace(/\/+$/, '') || '';
@@ -82,15 +82,16 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
 
         for (const targetId of targetIds) {
             let foundUsername = null;
-            // 1. Try Facebook Graph API endpoint
+
+            // 1. Try Facebook Graph API for name (avoids cannot_access_user_username error on Facebook host)
             try {
-                const fbRes = await graphGet(targetId, { fields: 'id,username,name', access_token: accessToken });
-                if (fbRes.username || fbRes.name) foundUsername = fbRes.username || fbRes.name;
+                const fbNameRes = await graphGet(targetId, { fields: 'id,name', access_token: accessToken });
+                if (fbNameRes.name) foundUsername = fbNameRes.name;
             } catch (e) {
-                debugLogs.push(`t_${targetId}_fb_err:${e.message.slice(0, 35)}`);
+                debugLogs.push(`t_${targetId}_name_err:${e.message.slice(0, 35)}`);
             }
 
-            // 2. Try Instagram Graph API endpoint
+            // 2. Try Instagram Graph API endpoint for username
             if (!foundUsername) {
                 try {
                     const igUrl = new URL(`https://graph.instagram.com/${graphVersion()}/${targetId}`);
@@ -102,9 +103,9 @@ async function authorizedInstagramAccounts(accessToken, debugLogs = []) {
                 }
             }
 
-            // Accept any granular target_id even if username lookup throws due to permissions/propagation delay!
-            if (targetId && (targetId !== dData.user_id || foundUsername)) {
-                addAccount(targetId, foundUsername, accessToken, null, 'system_user');
+            // Always register the authorized target_id even if name/username lookup had an issue
+            if (targetId) {
+                addAccount(targetId, foundUsername || 'instagram_account', accessToken, null, 'system_user');
             }
         }
 
