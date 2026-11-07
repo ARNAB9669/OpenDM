@@ -42,26 +42,115 @@ async function getLongLivedUserToken(accessToken) {
 }
 
 async function authorizedInstagramAccounts(accessToken) {
-    // 1. Primary path: Instagram API with Unified Login / Business Integration System User asset check
+    const accounts = [];
+    const seenIds = new Set();
+
+    function addAccount(id, username, token, pageId = null, tokenType = 'system_user') {
+        const strId = String(id || '');
+        if (!strId || seenIds.has(strId)) return;
+        seenIds.add(strId);
+        accounts.push({
+            id: strId,
+            username: username || strId,
+            accessToken: token,
+            pageId,
+            tokenType
+        });
+    }
+
+    // Strategy 1: Extract authorized target_ids from debug_token granular_scopes.
+    // In Unified Login, Meta frequently returns empty for /me/assigned_instagram_accounts,
+    // but the selected Instagram Account ID is guaranteed to be in the token's granular_scopes target_ids!
+    try {
+        const debugUrl = new URL(graphUrl('debug_token'));
+        debugUrl.search = new URLSearchParams({
+            input_token: accessToken,
+            access_token: `${process.env.META_APP_ID || ''}|${process.env.META_APP_SECRET || ''}`
+        });
+        const debugRes = await readJson(await fetch(debugUrl, { signal: AbortSignal.timeout(15000) }));
+        const granularScopes = debugRes.data?.granular_scopes || [];
+        const targetIds = new Set();
+
+        for (const gs of granularScopes) {
+            if (Array.isArray(gs.target_ids)) {
+                for (const tid of gs.target_ids) {
+                    if (tid) targetIds.add(String(tid));
+                }
+            }
+        }
+
+        for (const targetId of targetIds) {
+            try {
+                const igUser = await graphGet(targetId, {
+                    fields: 'id,username',
+                    access_token: accessToken
+                });
+                if (igUser && igUser.id && igUser.username) {
+                    addAccount(igUser.id, igUser.username, accessToken, null, 'system_user');
+                }
+            } catch (err) {
+                console.warn(`Target ID ${targetId} inspection failed:`, err.message);
+            }
+        }
+
+        if (accounts.length > 0) return accounts;
+    } catch (error) {
+        console.warn('debug_token granular_scopes check failed:', error.message);
+    }
+
+    // Strategy 2: Primary Unified Login endpoint (me/assigned_instagram_accounts)
     try {
         const assigned = await graphGet('me/assigned_instagram_accounts', {
             fields: 'id,username',
             access_token: accessToken
         });
-        if (Array.isArray(assigned.data) && assigned.data.length > 0) {
-            return assigned.data.map((acc) => ({
-                id: String(acc.id),
-                username: acc.username,
-                accessToken, // Unified Login System-User token is authorized across all assigned assets
-                pageId: null,
-                tokenType: 'system_user'
-            }));
+        if (Array.isArray(assigned.data)) {
+            for (const acc of assigned.data) {
+                if (acc.id) {
+                    addAccount(acc.id, acc.username, accessToken, null, 'system_user');
+                }
+            }
+            if (accounts.length > 0) return accounts;
         }
     } catch (error) {
         console.warn('assigned_instagram_accounts check failed or skipped:', error.message);
     }
 
-    // 2. Fallback path: Classic Facebook Pages connection (/me/accounts)
+    // Strategy 3: Check business portfolio owned/assigned assets via client_business_id
+    try {
+        const me = await graphGet('me', {
+            fields: 'id,client_business_id',
+            access_token: accessToken
+        });
+        const businessId = me.client_business_id;
+        if (businessId) {
+            const endpoints = [
+                `${businessId}/instagram_accounts`,
+                `${businessId}/assigned_instagram_accounts`,
+                `${businessId}/owned_instagram_accounts`
+            ];
+            for (const ep of endpoints) {
+                try {
+                    const res = await graphGet(ep, {
+                        fields: 'id,username',
+                        access_token: accessToken
+                    });
+                    if (Array.isArray(res.data)) {
+                        for (const acc of res.data) {
+                            if (acc.id) addAccount(acc.id, acc.username, accessToken, null, 'system_user');
+                        }
+                    }
+                    if (accounts.length > 0) return accounts;
+                } catch {
+                    // Try next endpoint
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('client_business_id asset inspection failed:', error.message);
+    }
+
+    // Strategy 4: Fallback to Facebook Pages connection (/me/accounts)
     // Exchange for long-lived user token so the retrieved page access tokens are permanent
     const longLivedUserToken = await getLongLivedUserToken(accessToken);
 
@@ -71,7 +160,6 @@ async function authorizedInstagramAccounts(accessToken) {
             access_token: longLivedUserToken
         });
 
-        const accounts = [];
         for (const page of pages.data || []) {
             let igAccount = page.instagram_business_account;
 
@@ -89,24 +177,36 @@ async function authorizedInstagramAccounts(accessToken) {
             }
 
             if (igAccount?.id) {
-                accounts.push({
-                    id: String(igAccount.id),
-                    username: igAccount.username || page.name,
-                    accessToken: page.access_token, // Crucial: per-page access token for Graph API calls
-                    pageId: String(page.id),
-                    tokenType: 'page'
-                });
+                addAccount(
+                    igAccount.id,
+                    igAccount.username || page.name,
+                    page.access_token,
+                    String(page.id),
+                    'page'
+                );
             }
         }
 
-        if (accounts.length > 0) {
-            return accounts;
-        }
+        if (accounts.length > 0) return accounts;
     } catch (error) {
         console.warn('me/accounts fallback check failed:', error.message);
     }
 
-    return [];
+    // Strategy 5: Direct /me check (if it was an Instagram-scoped user token)
+    try {
+        const directMe = await graphGet('me', {
+            fields: 'id,username',
+            access_token: accessToken
+        });
+        if (directMe && directMe.id && directMe.username) {
+            addAccount(directMe.id, directMe.username, accessToken, null, 'instagram_user');
+            if (accounts.length > 0) return accounts;
+        }
+    } catch (error) {
+        console.warn('direct /me check failed:', error.message);
+    }
+
+    return accounts;
 }
 
 export default async function handler(req, res) {
